@@ -1,0 +1,1088 @@
+let probeSec = 30;
+let powerOn = false;
+let tickTimer = 0;
+let busy = "";
+let serverRefresh = null;
+let linksLoader = null;
+
+function paintLegs(legs) {
+  const ids = { box: "st-box", warp: "st-warp", node: "st-node" };
+  Object.entries(ids).forEach(([key, id]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const leg = (legs && legs[key]) || { state: "off", why: "" };
+    el.classList.remove("off", "ok", "bad");
+    el.classList.add(leg.state || "off");
+    if (leg.why) el.title = leg.why;
+  });
+}
+
+function applyStack(data) {
+  if (!data || data.pending) return;
+  if (data.kind === "reconnect") {
+    // Watchdog сам инициировал перезапуск — покажем спиннер, если окно открыто.
+    if (!busy) setBusy("reload");
+    armPull();
+    return;
+  }
+  if (data.kind === "update") {
+    if (data.started) {
+      setVer("go", data);
+      return;
+    }
+    if (data.newer) {
+      setVer("new", data);
+      return;
+    }
+    setVer(data.ok === false ? "fail" : "same", data);
+    return;
+  }
+  if (data.kind === "autostart") {
+    if (chkAuto) {
+      chkAuto.checked = !!data.on;
+      chkAuto.title = data.on ? "в автозагрузке" : (data.why || "");
+    }
+    return;
+  }
+  if ("power" in data) {
+    powerOn = !!data.power;
+    clearBusy();
+    setOn(powerOn);
+    power.title = data.why || "Питание";
+  }
+  if (data.legs) paintLegs(data.legs);
+  armTick();
+}
+
+function armTick() {
+  window.clearInterval(tickTimer);
+  tickTimer = 0;
+  const box = document.getElementById("chk-tick");
+  if (!powerOn || (box && !box.checked)) return;
+  tickTimer = window.setInterval(() => {
+    call("tick");
+  }, Math.max(10, probeSec) * 1000);
+}
+
+async function call(name, arg) {
+  const api = window.pywebview && window.pywebview.api;
+  if (!api || !api[name]) {
+    clearBusy();
+    return null;
+  }
+  const result = arg === undefined ? await api[name]() : await api[name](arg);
+  applyStack(result);
+  if (result && result.pending) armPull();
+  return result;
+}
+
+let pullTimer = 0;
+function armPull() {
+  if (pullTimer) return;
+  const api = () => window.pywebview && window.pywebview.api;
+  let idle = 0;
+  pullTimer = window.setInterval(async () => {
+    const bridge = api();
+    if (!bridge || !bridge.pull) {
+      idle += 1;
+      if (idle > 50) {
+        window.clearInterval(pullTimer);
+        pullTimer = 0;
+      }
+      return;
+    }
+    const data = await bridge.pull();
+    if (!data || data.pending) {
+      idle = data && data.wait ? 0 : idle + 1;
+      // Подключение не отвечает — не оставляем кнопку вечно в «Включаю…».
+      if (busy && idle > 20) clearBusy();
+      if (idle > 50) {
+        window.clearInterval(pullTimer);
+        pullTimer = 0;
+      }
+      return;
+    }
+    idle = 0;
+    applyStack(data);
+  }, 100);
+}
+
+window.applyStack = applyStack;
+
+const ROUTES = {
+  "": "home",
+  "#": "home",
+  "#/": "home",
+  "#/settings": "settings",
+  "#/guide": "guide",
+};
+
+const TITLES = {
+  home: "Eblit",
+  settings: "Настройки",
+  guide: "Что это и как работает",
+};
+
+const power = document.getElementById("power");
+const label = document.getElementById("st-label");
+const island = document.querySelector(".island");
+const title = document.getElementById("title");
+const back = document.getElementById("btn-back");
+const views = {
+  home: document.getElementById("view-home"),
+  settings: document.getElementById("view-settings"),
+  guide: document.getElementById("view-guide"),
+};
+
+function routeName() {
+  return ROUTES[location.hash] || "home";
+}
+
+function applyRoute() {
+  const name = routeName();
+  Object.entries(views).forEach(([key, el]) => {
+    el.hidden = key !== name;
+  });
+  title.textContent = TITLES[name] || "Eblit";
+  back.hidden = name === "home";
+  if (name === "settings") {
+    if (linksLoader) linksLoader();
+    if (serverRefresh) serverRefresh();
+  }
+}
+
+function go(path) {
+  const hash = path.startsWith("#") ? path : `#/${path}`;
+  if (location.hash === hash) applyRoute();
+  else location.hash = hash;
+}
+
+function goHome() {
+  if (routeName() === "home") return;
+  location.hash = "#/";
+}
+
+if (!location.hash) history.replaceState(null, "", `${location.pathname}${location.search}#/`);
+applyRoute();
+window.addEventListener("hashchange", applyRoute);
+
+function closeCombos(except) {
+  document.querySelectorAll(".combo.open").forEach((root) => {
+    if (root === except) return;
+    root.classList.remove("open");
+    const menu = root.querySelector(".combo-menu");
+    const btn = root.querySelector(".combo-btn");
+    if (menu) menu.hidden = true;
+    if (btn) btn.setAttribute("aria-expanded", "false");
+  });
+}
+
+function paintCombo(root) {
+  const sel = root.querySelector("select");
+  const btn = root.querySelector(".combo-btn");
+  const menu = root.querySelector(".combo-menu");
+  if (!sel) return;
+  const opt = sel.selectedOptions[0];
+  if (btn) btn.textContent = opt ? opt.textContent : "";
+  if (!menu) return;
+  menu.querySelectorAll("[role='option']").forEach((el) => {
+    const on = el.dataset.value === sel.value;
+    el.setAttribute("aria-selected", on ? "true" : "false");
+    el.classList.toggle("hi", on);
+  });
+}
+
+function rebuildComboMenu(root) {
+  const sel = root.querySelector("select");
+  const menu = root.querySelector(".combo-menu");
+  if (!sel || !menu) return;
+  menu.replaceChildren(
+    ...[...sel.options].map((opt) => {
+      const li = document.createElement("li");
+      li.setAttribute("role", "option");
+      li.dataset.value = opt.value;
+      li.textContent = opt.textContent;
+      return li;
+    })
+  );
+  paintCombo(root);
+}
+
+function mountCombo(root) {
+  const sel = root.querySelector("select");
+  const btn = root.querySelector(".combo-btn");
+  const menu = root.querySelector(".combo-menu");
+  if (!sel || !btn || !menu) return;
+  rebuildComboMenu(root);
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (root.classList.contains("open")) closeCombos();
+    else {
+      closeCombos(root);
+      root.classList.add("open");
+      btn.setAttribute("aria-expanded", "true");
+      menu.hidden = false;
+      paintCombo(root);
+    }
+  });
+  menu.addEventListener("click", (e) => {
+    const opt = e.target.closest("[role='option']");
+    if (!opt) return;
+    sel.value = opt.dataset.value;
+    sel.dispatchEvent(new Event("change"));
+    closeCombos();
+    btn.focus();
+  });
+  sel.addEventListener("change", () => paintCombo(root));
+}
+
+document.addEventListener("mousedown", (e) => {
+  if (!e.target.closest(".combo")) closeCombos();
+});
+
+// pywebview easy_drag слушает mousedown на window и тянет окно. В полях ввода это
+// съедало выделение мышью — гасим всплытие, поведение самого поля остаётся.
+document.addEventListener("mousedown", (e) => {
+  if (e.target.closest("input, textarea")) e.stopPropagation();
+});
+
+back.addEventListener("click", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  goHome();
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const openCombo = document.querySelector(".combo.open");
+  if (openCombo) {
+    e.preventDefault();
+    closeCombos();
+    openCombo.querySelector(".combo-btn")?.focus();
+    return;
+  }
+  if (routeName() !== "home") {
+    e.preventDefault();
+    goHome();
+  }
+});
+
+window.addEventListener("mousedown", (e) => {
+  if (e.button === 3 || e.button === 4) e.preventDefault();
+});
+window.addEventListener("mouseup", (e) => {
+  if (e.button === 3 && routeName() !== "home") {
+    e.preventDefault();
+    goHome();
+  }
+});
+
+function setOn(on) {
+  power.setAttribute("aria-pressed", on ? "true" : "false");
+  label.classList.toggle("on", on);
+  label.textContent = on ? "Включено" : "Выключено";
+  if (power.classList.contains("on") === on) return;
+  power.classList.remove("on");
+  requestAnimationFrame(() => {
+    power.classList.toggle("on", on);
+  });
+}
+
+const BUSY_LABEL = {
+  start: "Включаю…",
+  stop: "Выключаю…",
+  reload: "Перезапуск…",
+  test: "Проверяю…",
+};
+
+function setBusy(name) {
+  busy = name;
+  power.classList.add("busy");
+  power.setAttribute("aria-busy", "true");
+  if (island) island.classList.add("busy");
+  label.textContent = BUSY_LABEL[name] || "Работаю…";
+}
+
+function clearBusy() {
+  if (!busy) return;
+  busy = "";
+  power.classList.remove("busy");
+  power.removeAttribute("aria-busy");
+  if (island) island.classList.remove("busy");
+  setOn(powerOn);
+  if (serverRefresh) serverRefresh();
+}
+
+power.addEventListener("click", () => {
+  if (busy) return;
+  const next = !powerOn;
+  setBusy(next ? "start" : "stop");
+  call(next ? "start" : "stop");
+});
+
+document.querySelectorAll("[data-action]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const name = btn.dataset.action;
+    if (name === "settings") {
+      go("#/settings");
+      return;
+    }
+    if (name === "guide") {
+      go("#/guide");
+      return;
+    }
+    if (busy) return;
+    setBusy(name);
+    call(name);
+  });
+});
+
+document.getElementById("btn-close").addEventListener("click", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  call("quit");
+});
+document.getElementById("btn-min").addEventListener("click", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  const tray = document.getElementById("chk-tray");
+  call(tray && !tray.checked ? "minimize" : "hide");
+});
+
+const DEFAULT_LINKS = [
+  "x.ai",
+  "grok.com",
+  "openai.com",
+  "chatgpt.com",
+  "oaistatic.com",
+  "oaiusercontent.com",
+  "claude.ai",
+  "anthropic.com",
+  "pornhub.com",
+  "pornhub.org",
+  "pornhubpremium.com",
+  "phncdn.com",
+  "rncdn7.com",
+  "cursor.sh",
+  "cursor.com",
+  "cursor-cdn.com",
+  "cursorapi.com",
+  "cursorvm.com",
+  "anysphere.com",
+  "anysphere.co",
+  "oculus.com",
+  "oculuscdn.com",
+  "oculusvr.com",
+  "meta.com",
+  "facebook.com",
+  "facebook-hardware.com",
+  "fbcdn.net",
+  "fbsbx.com",
+  "instagram.com",
+  "cdninstagram.com",
+];
+
+function parseLinks(raw) {
+  const seen = new Set();
+  const out = [];
+  String(raw || "")
+    .split(/[,;\r\n]+/)
+    .forEach((part) => {
+      const item = part.trim();
+      if (!item || item.startsWith("#")) return;
+      if (seen.has(item)) return;
+      seen.add(item);
+      out.push(item);
+    });
+  return out;
+}
+
+function formatLinksCsv(list) {
+  return list.join(", ");
+}
+
+function formatLinksExport(list) {
+  return ["# eblit-links v1", "# one suffix per line", ...list].join("\n");
+}
+
+function bindLinks() {
+  const input = document.getElementById("links-input");
+  const btnExport = document.getElementById("btn-links-export");
+  const btnImport = document.getElementById("btn-links-import");
+  if (!input && !btnExport && !btnImport) return;
+  let saved = "";
+
+  async function loadLinks() {
+    const api = window.pywebview && window.pywebview.api;
+    if (!api || !api.links || !input) return;
+    try {
+      const data = await api.links();
+      if (data && data.ok && Array.isArray(data.links) && data.links.length) {
+        input.value = formatLinksCsv(data.links);
+        saved = input.value;
+        return;
+      }
+    } catch (err) {
+      /* ignore */
+    }
+    if (!parseLinks(input.value).length) {
+      input.value = formatLinksCsv(DEFAULT_LINKS);
+    }
+  }
+
+  if (input && !parseLinks(input.value).length) {
+    input.value = formatLinksCsv(DEFAULT_LINKS);
+  }
+
+  // Поле — источник правды для config.json: пишем по уходу из поля, без перезапуска.
+  async function saveLinks() {
+    const api = window.pywebview && window.pywebview.api;
+    if (!api || !api.set_links || !input) return;
+    const list = parseLinks(input.value);
+    if (!list.length) return;
+    const text = formatLinksCsv(list);
+    if (text === saved) return;
+    try {
+      const result = await api.set_links(list);
+      if (result && result.ok) saved = text;
+    } catch (err) {
+      /* ignore */
+    }
+  }
+
+  if (input) {
+    input.addEventListener("change", saveLinks);
+    input.addEventListener("blur", saveLinks);
+  }
+
+  if (btnExport) {
+    btnExport.addEventListener("click", async () => {
+      const list = input ? parseLinks(input.value) : [];
+      const text = formatLinksExport(list);
+      try {
+        if (!navigator.clipboard || !navigator.clipboard.writeText) {
+          btnExport.title = "Буфер недоступен";
+          return;
+        }
+        await navigator.clipboard.writeText(text);
+        btnExport.title = "Скопировано";
+      } catch (err) {
+        btnExport.title = "Ошибка буфера";
+      }
+    });
+  }
+
+  if (btnImport) {
+    btnImport.addEventListener("click", async () => {
+      try {
+        if (!navigator.clipboard || !navigator.clipboard.readText) {
+          btnImport.title = "Буфер недоступен";
+          return;
+        }
+        const text = await navigator.clipboard.readText();
+        const list = parseLinks(text);
+        if (!list.length) {
+          btnImport.title = "Пустой буфер";
+          return;
+        }
+        if (input) input.value = formatLinksCsv(list);
+        btnImport.title = "Импортировано";
+      } catch (err) {
+        btnImport.title = "Ошибка буфера";
+      }
+    });
+  }
+
+  return loadLinks;
+}
+
+const PROBE_SECONDS = [10, 30, 60, 300, 900, 3600];
+const PROBE_PRESET = [
+  { n: 10, u: "s" },
+  { n: 30, u: "s" },
+  { n: 1, u: "m" },
+  { n: 5, u: "m" },
+  { n: 15, u: "m" },
+  { n: 1, u: "h" },
+];
+const UNIT_SEC = { s: 1, m: 60, h: 3600 };
+
+function clampProbeIndex(n) {
+  const i = Math.round(Number(n));
+  if (!Number.isFinite(i)) return 0;
+  return Math.min(5, Math.max(0, i));
+}
+
+function nearestProbeIndex(sec) {
+  let best = 0;
+  let dist = Infinity;
+  for (let i = 0; i < PROBE_SECONDS.length; i += 1) {
+    const d = Math.abs(PROBE_SECONDS[i] - sec);
+    if (d < dist) {
+      dist = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+function bindProbe() {
+  const seg = document.getElementById("probe-seg");
+  const thumb = document.getElementById("probe-thumb");
+  const num = document.getElementById("probe-num");
+  const unit = document.getElementById("probe-unit");
+  if (!seg && !num) return;
+
+  let index = 1;
+
+  function setThumb(i) {
+    index = clampProbeIndex(i);
+    probeSec = PROBE_SECONDS[index];
+    armTick();
+    if (thumb && seg) {
+      const w = seg.clientWidth;
+      const dpr = window.devicePixelRatio || 1;
+      const x = w ? Math.round(((index + 0.5) / 6) * w * dpr) / dpr : 0;
+      thumb.style.left = `${x}px`;
+      seg.querySelectorAll(".seg-dots i").forEach((dot, n) => {
+        dot.hidden = n === index;
+      });
+    }
+    if (seg) seg.setAttribute("aria-valuenow", String(index));
+  }
+
+  function writePreset(i) {
+    const p = PROBE_PRESET[clampProbeIndex(i)];
+    if (num) num.value = String(p.n);
+    if (unit) unit.value = p.u;
+    const unitCombo = document.getElementById("probe-unit-combo");
+    if (unitCombo) paintCombo(unitCombo);
+  }
+
+  function fieldsToSec() {
+    const n = Number(String(num ? num.value : "").replace(",", ".").trim());
+    if (!Number.isFinite(n) || n < 0) return null;
+    const u = unit ? unit.value : "s";
+    return Math.round(n * (UNIT_SEC[u] || 1));
+  }
+
+  function commitFields() {
+    const sec = fieldsToSec();
+    if (sec === null) {
+      writePreset(index);
+      return;
+    }
+    setThumb(nearestProbeIndex(sec));
+  }
+
+  function applyFromSeg(clientX, writeFields) {
+    const box = seg.getBoundingClientRect();
+    const t = box.width ? Math.min(1, Math.max(0, (clientX - box.left) / box.width)) : 0;
+    setThumb(t >= 1 ? 5 : Math.floor(t * 6));
+    if (writeFields) writePreset(index);
+  }
+
+  setThumb(1);
+  writePreset(1);
+  if (seg && typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(() => setThumb(index)).observe(seg);
+  }
+
+  if (seg) {
+    const drag = (e) => applyFromSeg(e.clientX, true);
+    seg.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      seg.setPointerCapture(e.pointerId);
+      applyFromSeg(e.clientX, true);
+    });
+    seg.addEventListener("pointermove", (e) => {
+      if (!seg.hasPointerCapture(e.pointerId)) return;
+      applyFromSeg(e.clientX, true);
+    });
+    seg.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setThumb(index + 1);
+        writePreset(index);
+      }
+      if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+        e.preventDefault();
+        setThumb(index - 1);
+        writePreset(index);
+      }
+    });
+  }
+
+  if (num) {
+    num.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commitFields();
+        num.blur();
+      }
+    });
+    num.addEventListener("blur", commitFields);
+  }
+  if (unit) unit.addEventListener("change", commitFields);
+}
+
+const STAR_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6 14.2 8.7l5.6.8-4 3.94.95 5.56L12 16.5l-4.75 2.5.95-5.56-4-3.94 5.6-.8z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
+const STAR_SVG_ON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6 14.2 8.7l5.6.8-4 3.94.95 5.56L12 16.5l-4.75 2.5.95-5.56-4-3.94 5.6-.8z" fill="currentColor" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
+
+function bindServers() {
+  const parseApi = window.EblitNodeParse;
+  const list = document.getElementById("server-list");
+  const msg = document.getElementById("server-msg");
+  const sel = document.getElementById("sel-node");
+  const combo = document.getElementById("node-combo");
+  const paste = document.getElementById("node-paste");
+  const composer = document.getElementById("node-composer");
+  const btnCompose = document.getElementById("btn-node-compose");
+  const btnParse = document.getElementById("btn-node-parse");
+  const btnAdd = document.getElementById("btn-node-add");
+  const btnCancel = document.getElementById("btn-node-cancel");
+  const preview = document.getElementById("node-preview");
+  if (!list) return null;
+
+  let pending = [];
+  let waits = 0;
+  let selWanted = "auto";
+
+  function say(text, ok) {
+    if (!msg) return;
+    if (!text) {
+      msg.hidden = true;
+      msg.textContent = "";
+      msg.classList.remove("ok");
+      return;
+    }
+    msg.hidden = false;
+    msg.textContent = text;
+    msg.classList.toggle("ok", !!ok);
+  }
+
+  function clearPreview() {
+    pending = [];
+    if (preview) {
+      preview.hidden = true;
+      preview.replaceChildren();
+    }
+    if (btnAdd) btnAdd.hidden = true;
+  }
+
+  function setComposerOpen(open) {
+    if (composer) composer.hidden = !open;
+    if (open && paste) paste.focus();
+  }
+
+  function closeComposer() {
+    clearPreview();
+    if (paste) paste.value = "";
+    setComposerOpen(false);
+  }
+
+  function row(n) {
+    const li = document.createElement("li");
+    li.classList.toggle("on", !!n.current);
+    li.dataset.tag = n.tag;
+    const dot = document.createElement("span");
+    dot.className = "geo-dot";
+    const body = document.createElement("span");
+    body.className = "geo-body";
+    const name = document.createElement("span");
+    name.textContent = n.tag;
+    body.appendChild(name);
+    if (n.host) {
+      const host = document.createElement("span");
+      host.className = "geo-host";
+      host.textContent = n.host;
+      body.appendChild(host);
+    }
+    const ops = document.createElement("div");
+    ops.className = "node-ops";
+    const fav = document.createElement("button");
+    fav.type = "button";
+    fav.className = "node-ico node-fav";
+    fav.dataset.tag = n.tag;
+    const favOn = !!n.favorite;
+    fav.setAttribute("aria-pressed", favOn ? "true" : "false");
+    fav.setAttribute("aria-label", favOn ? "Снять избранное" : "Избранное для первого живого");
+    fav.title = favOn ? "Снять избранное" : "«Первый живой» начинает с этого сервера";
+    fav.classList.toggle("on", favOn);
+    fav.innerHTML = favOn ? STAR_SVG_ON : STAR_SVG;
+    const drop = document.createElement("button");
+    drop.type = "button";
+    drop.className = "node-ico node-drop";
+    drop.dataset.tag = n.tag;
+    drop.setAttribute("aria-label", "Удалить");
+    drop.title = "Удалить из config.json";
+    drop.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.2 6.2 17.8 17.8M17.8 6.2 6.2 17.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
+    ops.append(fav, drop);
+    li.append(dot, body, ops);
+    if (n.current) li.title = "сейчас через этот сервер";
+    return li;
+  }
+
+  function note(data) {
+    if (!data.nodes.length) return "в config.json нет vless-серверов";
+    if (!data.selected && !data.auto) return "сервер не выбран";
+    if (data.pick && data.pick.tag && data.selected && data.pick.tag !== data.selected) {
+      return `проверка выбрала ${data.pick.tag}, в конфиге ${data.selected}`;
+    }
+    return "";
+  }
+
+  function paintSelect(data, nodes) {
+    if (!sel) return;
+    sel.replaceChildren();
+    const auto = document.createElement("option");
+    auto.value = "auto";
+    auto.textContent = data.selected && data.auto ? `Первый живой · ${data.selected}` : "Первый живой";
+    sel.appendChild(auto);
+    nodes.forEach((n) => {
+      const opt = document.createElement("option");
+      opt.value = n.tag;
+      opt.textContent = n.tag;
+      sel.appendChild(opt);
+    });
+    const tags = new Set(nodes.map((n) => n.tag));
+    selWanted = !data.auto && data.selected && tags.has(data.selected) ? data.selected : "auto";
+    sel.value = selWanted;
+    if (combo) rebuildComboMenu(combo);
+  }
+
+  async function refresh() {
+    if (busy) {
+      say("жду, пока подключение перепишет config.json…");
+      return;
+    }
+    const api = window.pywebview && window.pywebview.api;
+    if (!api || !api.nodes) {
+      if (waits < 6) {
+        waits += 1;
+        window.setTimeout(refresh, 500);
+      }
+      return;
+    }
+    waits = 0;
+    let data = null;
+    try {
+      data = await api.nodes();
+    } catch (err) {
+      data = null;
+    }
+    if (!data || !data.ok) {
+      list.replaceChildren();
+      say(data && data.why ? `config.json не прочитан: ${data.why}` : "config.json не прочитан");
+      return;
+    }
+    const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+    list.replaceChildren(...nodes.map(row));
+    paintSelect(data, nodes);
+    say(note({ ...data, nodes }));
+  }
+
+  function paintStar(btn, on) {
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    btn.setAttribute("aria-label", on ? "Снять избранное" : "Избранное для первого живого");
+    btn.title = on ? "Снять избранное" : "«Первый живой» начинает с этого сервера";
+    btn.classList.toggle("on", on);
+    btn.innerHTML = on ? STAR_SVG_ON : STAR_SVG;
+  }
+
+  list.addEventListener("click", async (e) => {
+    const api = window.pywebview && window.pywebview.api;
+    if (!api) return;
+
+    // Избранное — только файл рядом с config, без перезапуска: красим строку на месте.
+    const star = e.target.closest(".node-fav");
+    if (star) {
+      const on = star.getAttribute("aria-pressed") === "true";
+      paintStar(star, !on);
+      if (!on) {
+        list.querySelectorAll(".node-fav").forEach((other) => {
+          if (other !== star && other.getAttribute("aria-pressed") === "true") paintStar(other, false);
+        });
+      }
+      try {
+        const result = await api.set_favorite(on ? null : star.dataset.tag);
+        if (result && !result.ok) {
+          paintStar(star, on);
+          say(result.why || "не удалось сохранить избранное", false);
+        }
+      } catch (err) {
+        paintStar(star, on);
+        say("не удалось сохранить избранное", false);
+      }
+      return;
+    }
+
+    const drop = e.target.closest(".node-drop");
+    if (!drop) return;
+    const li = drop.closest("li");
+    const wasCurrent = !!(li && li.classList.contains("on"));
+    try {
+      const result = await api.remove_node(drop.dataset.tag);
+      if (result && !result.ok) {
+        say(result.why || "не удалось удалить", false);
+        return;
+      }
+      await refresh();
+      if (wasCurrent) say("удалён текущий — сменится после перезапуска", true);
+    } catch (err) {
+      say("не удалось удалить", false);
+    }
+  });
+
+  if (sel) {
+    sel.addEventListener("change", async () => {
+      const want = sel.value;
+      if (want === selWanted) return;
+      const api = window.pywebview && window.pywebview.api;
+      if (!api || !api.select_node || busy) {
+        sel.value = selWanted;
+        if (combo) paintCombo(combo);
+        return;
+      }
+      selWanted = want;
+      setBusy("reload");
+      await api.select_node(want);
+      armPull();
+    });
+  }
+
+  if (btnCompose) {
+    btnCompose.addEventListener("click", () => {
+      say("", false);
+      setComposerOpen(true);
+    });
+  }
+
+  if (btnParse && parseApi) {
+    btnParse.addEventListener("click", () => {
+      const r = parseApi.parseNodes(paste ? paste.value : "");
+      if (!r.ok) {
+        clearPreview();
+        say(r.error, false);
+        return;
+      }
+      pending = r.nodes;
+      say("", false);
+      if (preview) {
+        preview.hidden = false;
+        preview.replaceChildren(
+          ...parseApi.previewRows(pending).map((item) => {
+            const art = document.createElement("article");
+            const title = document.createElement("strong");
+            title.textContent = item.name;
+            const meta = document.createElement("div");
+            meta.textContent = `${item.host} · SNI ${item.sni} · flow ${item.flow}`;
+            const secrets = document.createElement("div");
+            secrets.textContent = `uuid ${item.uuid} · pbk ${item.pbk}`;
+            art.append(title, meta, secrets);
+            return art;
+          })
+        );
+      }
+      if (btnAdd) btnAdd.hidden = false;
+    });
+  }
+
+  if (btnAdd) {
+    btnAdd.addEventListener("click", async () => {
+      if (!pending.length) {
+        say("сначала разбери вставку", false);
+        return;
+      }
+      const api = window.pywebview && window.pywebview.api;
+      if (!api || !api.add_node) return;
+      let added = 0;
+      let lastWhy = "";
+      for (const n of pending) {
+        try {
+          const result = await api.add_node(n);
+          if (result && result.ok) added += 1;
+          else lastWhy = (result && result.why) || "ошибка";
+        } catch (err) {
+          lastWhy = String(err);
+        }
+      }
+      if (!added) {
+        say(lastWhy || "не добавилось", false);
+        return;
+      }
+      closeComposer();
+      refresh();
+      say(added === 1 ? "сервер добавлен" : `добавлено: ${added}`, true);
+    });
+  }
+
+  if (btnCancel) {
+    btnCancel.addEventListener("click", () => {
+      closeComposer();
+      say("", false);
+    });
+  }
+
+  return refresh;
+}
+
+document.querySelectorAll(".combo").forEach(mountCombo);
+linksLoader = bindLinks();
+bindProbe();
+serverRefresh = bindServers();
+if (serverRefresh) serverRefresh();
+
+const chkTick = document.getElementById("chk-tick");
+if (chkTick) chkTick.addEventListener("change", armTick);
+
+const chkAuto = document.getElementById("chk-autostart");
+if (chkAuto) {
+  chkAuto.addEventListener("change", () => {
+    call("set_autostart", chkAuto.checked);
+  });
+}
+
+const chkReconnect = document.getElementById("chk-reconnect");
+function sendAutoreconnect() {
+  const api = window.pywebview && window.pywebview.api;
+  if (api && api.set_autoreconnect) api.set_autoreconnect(chkReconnect.checked);
+}
+if (chkReconnect) {
+  try {
+    if (localStorage.getItem("eblit-reconnect") === "0") chkReconnect.checked = false;
+  } catch (err) {
+    /* ignore */
+  }
+  chkReconnect.addEventListener("change", () => {
+    try {
+      localStorage.setItem("eblit-reconnect", chkReconnect.checked ? "1" : "0");
+    } catch (err) {
+      /* ignore */
+    }
+    sendAutoreconnect();
+  });
+}
+
+const chkLan = document.getElementById("chk-lan");
+function paintLan(data) {
+  if (!chkLan || !data) return;
+  const on = !!data.on;
+  chkLan.checked = on;
+  chkLan.title = data.why || "";
+  const field = document.getElementById("lan-field");
+  const addr = document.getElementById("lan-addr");
+  const hint = document.getElementById("lan-hint");
+  if (field) field.hidden = !on;
+  if (hint) hint.hidden = !on;
+  if (!addr) return;
+  // Адрес не нашли (только TUN / нет сети) — порт всё равно называем.
+  addr.value = data.address ? `${data.address}:${data.port}` : on ? `порт ${data.port}` : "";
+}
+if (chkLan) {
+  chkLan.addEventListener("change", async () => {
+    const api = window.pywebview && window.pywebview.api;
+    if (!api || !api.set_lan) return;
+    if (busy) {
+      chkLan.checked = !chkLan.checked;
+      return;
+    }
+    const res = await api.set_lan(chkLan.checked);
+    paintLan(res);
+    // Питание включено — подключение уже перезапускается, кнопка не должна врать.
+    if (res && res.restart) {
+      setBusy("reload");
+      armPull();
+    }
+  });
+}
+
+const chkTray = document.getElementById("chk-tray");
+if (chkTray) {
+  try {
+    const raw = localStorage.getItem("eblit-tray");
+    if (raw === "0") chkTray.checked = false;
+    if (raw === "1") chkTray.checked = true;
+  } catch (err) {
+    /* ignore */
+  }
+  chkTray.addEventListener("change", () => {
+    try {
+      localStorage.setItem("eblit-tray", chkTray.checked ? "1" : "0");
+    } catch (err) {
+      /* ignore */
+    }
+  });
+}
+
+const verBtn = document.getElementById("ver");
+let verMode = "idle";
+function setVer(mode, data) {
+  verMode = mode;
+  if (!verBtn) return;
+  const current = (data && data.current) || verBtn.dataset.current || "1.0.0";
+  verBtn.dataset.current = current;
+  verBtn.classList.toggle("fresh", mode === "new");
+  verBtn.classList.toggle("busy", mode === "wait" || mode === "go");
+  if (mode === "wait") {
+    verBtn.textContent = "…";
+    verBtn.title = "спрашиваю GitHub";
+    return;
+  }
+  if (mode === "go") {
+    verBtn.textContent = "ставлю";
+    verBtn.title = data && data.why ? data.why : "запускаю установщик";
+    return;
+  }
+  if (mode === "new") {
+    verBtn.textContent = data.latest;
+    verBtn.title = `поставить ${data.latest}`;
+    return;
+  }
+  verBtn.textContent = current;
+  if (mode === "same") verBtn.title = "это последняя";
+  else if (mode === "fail") verBtn.title = (data && data.why) || "не достучался";
+  else verBtn.title = "проверить обновление";
+}
+if (verBtn) {
+  verBtn.addEventListener("click", async () => {
+    const api = window.pywebview && window.pywebview.api;
+    if (!api) return;
+    if (verMode === "wait" || verMode === "go") return;
+    if (verMode === "new") {
+      if (!api.install_update) return;
+      setVer("go", { current: verBtn.dataset.current });
+      const res = await api.install_update();
+      applyStack(res);
+      if (res && res.pending) armPull();
+      return;
+    }
+    if (!api.check_update) return;
+    setVer("wait", { current: verBtn.dataset.current });
+    const res = await api.check_update();
+    if (!res) {
+      setVer("fail", { why: "нет ответа" });
+      return;
+    }
+    if (res.newer) setVer("new", res);
+    else setVer(res.ok === false ? "fail" : "same", res);
+  });
+}
+
+window.addEventListener("pywebviewready", async () => {
+  armPull();
+  await call("status");
+  if (serverRefresh) serverRefresh();
+  const api = window.pywebview && window.pywebview.api;
+  if (!api) return;
+  if (api.version) {
+    const ver = await api.version();
+    if (ver && ver.version) setVer("idle", { current: ver.version });
+  }
+  if (chkReconnect) sendAutoreconnect();
+  if (api.lan_state) paintLan(await api.lan_state());
+  if (!api.autostart_state) return;
+  const auto = await api.autostart_state();
+  if (chkAuto && auto) chkAuto.checked = !!auto.on;
+});

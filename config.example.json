@@ -1,0 +1,256 @@
+{
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "udp",
+        "tag": "google",
+        "server": "8.8.8.8"
+      },
+      {
+        "type": "udp",
+        "tag": "yandex",
+        "server": "77.88.8.8"
+      },
+      {
+        "type": "fakeip",
+        "tag": "fakeip",
+        "inet4_range": "198.18.0.0/15"
+      }
+    ],
+    "rules": [
+      {
+        "domain_suffix": [
+          "x.ai",
+          "grok.com",
+          "openai.com",
+          "chatgpt.com",
+          "oaistatic.com",
+          "oaiusercontent.com",
+          "claude.ai",
+          "anthropic.com",
+          "pornhub.com",
+          "pornhub.org",
+          "pornhubpremium.com",
+          "phncdn.com",
+          "rncdn7.com",
+          "cursor.sh",
+          "cursor.com",
+          "cursor-cdn.com",
+          "cursorapi.com",
+          "cursorvm.com",
+          "anysphere.com",
+          "anysphere.co",
+          "oculus.com",
+          "oculuscdn.com",
+          "oculusvr.com",
+          "meta.com",
+          "facebook.com",
+          "facebook-hardware.com",
+          "fbcdn.net",
+          "fbsbx.com",
+          "instagram.com",
+          "cdninstagram.com"
+        ],
+        "server": "fakeip"
+      }
+    ],
+    "final": "google",
+    "strategy": "ipv4_only"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-fastly",
+      "interface_name": "tun-fastly",
+      "address": [
+        "172.19.88.1/30"
+      ],
+      "mtu": 1400,
+      "auto_route": true,
+      "strict_route": false,
+      "stack": "system",
+      "route_address": [
+        "151.101.0.0/16",
+        "151.139.0.0/16",
+        "199.232.0.0/16",
+        "199.27.69.0/24",
+        "199.27.74.0/23",
+        "199.27.77.0/24",
+        "199.27.128.0/21",
+        "199.27.212.0/22",
+        "199.27.228.0/24",
+        "199.27.231.0/24",
+        "23.235.32.0/19",
+        "23.235.126.0/23",
+        "198.18.0.0/15",
+        "8.8.8.8/32",
+        "8.8.4.4/32",
+        "1.1.1.1/32",
+        "1.0.0.1/32"
+      ]
+    },
+    {
+      "type": "mixed",
+      "tag": "mixed-local",
+      "listen": "127.0.0.1",
+      "listen_port": 2080
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "LagomVPN",
+      "outbounds": [
+        "direct"
+      ]
+    },
+    {
+      "type": "socks",
+      "tag": "warp",
+      "server": "127.0.0.1",
+      "server_port": 40000,
+      "version": "5"
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "action": "sniff",
+        "timeout": "500ms"
+      },
+      {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
+        "port": [
+          53
+        ],
+        "action": "hijack-dns"
+      },
+      {
+        "domain": [
+          "dns.google",
+          "cloudflare-dns.com",
+          "one.one.one.one"
+        ],
+        "port": [
+          443
+        ],
+        "action": "reject"
+      },
+      {
+        "ip_cidr": [
+          "172.19.88.0/30"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      },
+      {
+        "domain_suffix": [
+          "discord.com",
+          "discord.gg",
+          "discord.media",
+          "discordapp.com",
+          "discordapp.net",
+          "discordcdn.com",
+          "discord.status",
+          "discord.gift",
+          "discord.gifts",
+          "discord.app",
+          "discord.co",
+          "discordactivities.com",
+          "discord-activities.com",
+          "discordsays.com",
+          "discordsez.com",
+          "discordmerch.com",
+          "discordpartygames.com",
+          "discordstatus.com"
+        ],
+        "domain": [
+          "discord-attachments-uploads-prd.storage.googleapis.com"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "ip_cidr": [
+          "151.101.0.0/16",
+          "151.139.0.0/16",
+          "199.232.0.0/16",
+          "199.27.69.0/24",
+          "199.27.74.0/23",
+          "199.27.77.0/24",
+          "199.27.128.0/21",
+          "199.27.212.0/22",
+          "199.27.228.0/24",
+          "199.27.231.0/24",
+          "23.235.32.0/19",
+          "23.235.126.0/23"
+        ],
+        "outbound": "warp"
+      },
+      {
+        "domain_suffix": [
+          "chatgpt.com",
+          "openai.com",
+          "oaistatic.com",
+          "oaiusercontent.com"
+        ],
+        "network": "udp",
+        "port": [
+          443
+        ],
+        "action": "reject"
+      },
+      {
+        "domain_suffix": [
+          "x.ai",
+          "grok.com",
+          "openai.com",
+          "chatgpt.com",
+          "oaistatic.com",
+          "oaiusercontent.com",
+          "claude.ai",
+          "anthropic.com",
+          "pornhub.com",
+          "pornhub.org",
+          "pornhubpremium.com",
+          "phncdn.com",
+          "rncdn7.com",
+          "cursor.sh",
+          "cursor.com",
+          "cursor-cdn.com",
+          "cursorapi.com",
+          "cursorvm.com",
+          "anysphere.com",
+          "anysphere.co",
+          "oculus.com",
+          "oculuscdn.com",
+          "oculusvr.com",
+          "meta.com",
+          "facebook.com",
+          "facebook-hardware.com",
+          "fbcdn.net",
+          "fbsbx.com",
+          "instagram.com",
+          "cdninstagram.com"
+        ],
+        "outbound": "LagomVPN"
+      }
+    ],
+    "final": "direct",
+    "auto_detect_interface": true,
+    "default_domain_resolver": "google"
+  }
+}

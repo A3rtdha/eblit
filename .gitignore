@@ -1,0 +1,35 @@
+# Live secrets — never the working config, only config.example.json
+config.json
+README.txt
+lagom-*.json
+_probe*.json
+
+# Runtime
+*.log
+health.log
+sing-box.log
+split-ui.log
+
+# Binaries and build output
+sing-box.exe
+dist/
+dist4/
+build/
+*.exe
+*.msi
+*.zip
+
+# Local junk
+.cursor/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+_tkprobe.py
+_uidemo.py
+_shot*
+*.bak
+.DS_Store
+Thumbs.db

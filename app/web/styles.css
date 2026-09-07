@@ -5,6 +5,7 @@
   --mute-2: rgba(255, 255, 255, 0.26);
   --line: rgba(255, 255, 255, 0.08);
   --live: #8aaeb4;
+  --lag: #8a7aad;
   --fault: #c47a7a;
 }
 
@@ -71,6 +72,7 @@ html, body {
 .node-ico:focus-visible,
 .node-drop:focus-visible,
 #btn-node-compose:focus-visible,
+#btn-node-ping:focus-visible,
 #btn-node-parse:focus-visible,
 #btn-node-add:focus-visible,
 #btn-node-cancel:focus-visible,
@@ -433,8 +435,7 @@ textarea {
 #btn-links-import,
 #btn-node-parse,
 #btn-node-add,
-#btn-node-cancel,
-#btn-node-compose {
+#btn-node-cancel {
   appearance: none;
   -webkit-appearance: none;
   display: inline-flex;
@@ -452,18 +453,11 @@ textarea {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
   transition: background .22s ease, color .22s ease, border-color .22s ease;
 }
-#btn-node-compose {
-  width: 32px;
-  padding: 0;
-  display: grid;
-  place-items: center;
-}
 #btn-links-export:hover,
 #btn-links-import:hover,
 #btn-node-parse:hover,
 #btn-node-add:hover,
-#btn-node-cancel:hover,
-#btn-node-compose:hover {
+#btn-node-cancel:hover {
   background: #1c1c1e;
   color: rgba(255, 255, 255, 0.88);
   border-color: rgba(255, 255, 255, 0.2);
@@ -579,6 +573,7 @@ textarea {
 .node-ico,
 .node-drop {
   appearance: none;
+  -webkit-appearance: none;
   border: 0;
   background: transparent;
   cursor: pointer;
@@ -590,7 +585,7 @@ textarea {
   place-items: center;
   border-radius: 8px;
   color: rgba(255, 255, 255, 0.34);
-  transition: color .22s ease, background .22s ease;
+  transition: color .22s ease, background .22s ease, border-color .22s ease;
 }
 .node-ico svg,
 .node-drop svg {
@@ -598,8 +593,31 @@ textarea {
   height: 16px;
   display: block;
 }
+.combo-row .node-ico {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #141416;
+  color: rgba(255, 255, 255, 0.62);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
 .node-drop { color: var(--fault); }
 .node-drop:hover { color: #d89292; background: rgba(196, 122, 122, 0.12); }
+.combo-row .node-plus:hover {
+  background: #1c1c1e;
+  color: rgba(255, 255, 255, 0.88);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.combo-row .node-ping:hover {
+  background: #1c1c1e;
+  color: var(--live);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.node-ping.spin svg { animation: spin 0.9s linear infinite; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 
 .block:has(.combo.open) { z-index: 5; }
 .combo {
@@ -752,10 +770,30 @@ textarea {
   font-size: 13px;
   color: rgba(255,255,255,.5);
 }
-.server-list li.on { color: rgba(255,255,255,.88); }
-.server-list li.on .geo-dot {
-  background: var(--live);
-  box-shadow: 0 0 0 3px rgba(138,174,180,.14);
+.server-list li.on .geo-name { color: var(--live); }
+.server-list li.on .geo-now { display: block; }
+.geo-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.geo-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.geo-now {
+  display: none;
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+  color: var(--live);
+}
+.geo-now svg {
+  width: 11px;
+  height: 11px;
+  display: block;
 }
 .server-list .node-ops {
   margin-left: auto;
@@ -883,12 +921,12 @@ textarea {
   #btn-node-parse,
   #btn-node-add,
   #btn-node-cancel,
-  #btn-node-compose,
   .node-ico,
   .node-fav,
   .node-drop {
     transition: none;
   }
+  .node-ping.spin svg { animation: none; }
   .power.on .ring,
   .power.on .stem,
   .power.on .arc,

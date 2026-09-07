@@ -1,6 +1,7 @@
 """Health try_order: favorite, last pick, config order, manual."""
 from __future__ import annotations
 
+import inspect
 import json
 import tempfile
 import unittest
@@ -106,6 +107,71 @@ class ManualPick(unittest.TestCase):
         nodes.clear_manual()
         data = json.loads(pick.read_text(encoding="utf-8"))
         self.assertNotIn("manual", data)
+
+
+class ProbeContract(unittest.TestCase):
+    def test_probe_still_accepts_three_args(self):
+        params = list(inspect.signature(m.probe).parameters)
+        self.assertEqual(params[:3], ["tag", "outbound", "ip"])
+
+
+class ScanAll(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="eblit-scan-")
+        self.dir = Path(self.tmp.name)
+        (self.dir / "config.json").write_text(json.dumps(cfg_with_tags(["Sweden", "Finland"])), encoding="utf-8")
+        self.root_patch = patch("app.paths.root", return_value=self.dir)
+        self.root_patch.start()
+        self.addCleanup(self.root_patch.stop)
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_does_not_write_selector_or_pick(self):
+        def fake_probe(tag, outbound, ip, port=m.PROBE_PORT, probe_path=None):
+            live = tag == "Sweden"
+            return live, 40 if live else 900, "200" if live else "timeout"
+
+        with patch.object(m, "probe", side_effect=fake_probe):
+            result = m.scan_all()
+        cfg = json.loads((self.dir / "config.json").read_text(encoding="utf-8"))
+        selector = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "LagomVPN")
+        self.assertEqual(selector["outbounds"], [])
+        self.assertFalse((self.dir / nodes.PICK_FILE).is_file())
+        self.assertTrue(result["ok"])
+        by_tag = {n["tag"]: n for n in result["nodes"]}
+        self.assertTrue(by_tag["Sweden"]["live"])
+        self.assertFalse(by_tag["Finland"]["live"])
+        self.assertEqual(by_tag["Finland"]["why"], "timeout")
+
+    def test_uses_scan_ports_not_health_probe(self):
+        seen = []
+
+        def fake_probe(tag, outbound, ip, port=m.PROBE_PORT, probe_path=None):
+            seen.append(port)
+            return True, 10, "200"
+
+        with patch.object(m, "probe", side_effect=fake_probe):
+            m.scan_all()
+        self.assertTrue(seen)
+        self.assertTrue(all(p >= 2100 for p in seen))
+
+
+class MainCleanup(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="eblit-health-clean-")
+        self.dir = Path(self.tmp.name)
+        (self.dir / "config.json").write_text(json.dumps({"outbounds": []}), encoding="utf-8")
+        self.root_patch = patch("app.paths.root", return_value=self.dir)
+        self.root_patch.start()
+        self.addCleanup(self.root_patch.stop)
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_spares_scan_probe_files(self):
+        scan = self.dir / "_probe_2100.json"
+        scan.write_text("{}", encoding="utf-8")
+        (self.dir / "_probe.json").write_text("{}", encoding="utf-8")
+        self.assertEqual(m.main(), 1)
+        self.assertTrue(scan.is_file())
+        self.assertFalse((self.dir / "_probe.json").is_file())
 
 
 if __name__ == "__main__":

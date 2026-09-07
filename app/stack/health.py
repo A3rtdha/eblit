@@ -6,10 +6,12 @@ import json
 import socket
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
 import app.paths as paths
+from app.log import echo
 from app.paths import singbox
 from app.stack import nodes
 from app.stack.httpchk import live_exit, status_code
@@ -43,14 +45,16 @@ def _log() -> Path:
 
 PROBE_URL = "https://grok.com/"
 PROBE_PORT = 2099
+SCAN_PORT = 2100
+SCAN_WORKERS = 4
 
 
 def log(line: str) -> None:
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     text = f"{stamp} {line}"
-    print(text, flush=True)
     with _log().open("a", encoding="utf-8") as f:
         f.write(text + "\n")
+    echo(text)
 
 
 def resolve_one(host: str) -> str | None:
@@ -65,21 +69,27 @@ def resolve_one(host: str) -> str | None:
     return ips[0] if ips else None
 
 
-def probe(tag: str, outbound: dict, ip: str) -> tuple[bool, int, str]:
+def probe(
+    tag: str,
+    outbound: dict,
+    ip: str,
+    port: int = PROBE_PORT,
+    probe_path: Path | None = None,
+) -> tuple[bool, int, str]:
     ob = dict(outbound)
     ob["server"] = ip
-    probe_path = _dir() / "_probe.json"
+    path = probe_path if probe_path is not None else _dir() / "_probe.json"
     cfg = {
         "log": {"level": "error"},
         "inbounds": [
-            {"type": "mixed", "tag": "m", "listen": "127.0.0.1", "listen_port": PROBE_PORT}
+            {"type": "mixed", "tag": "m", "listen": "127.0.0.1", "listen_port": port}
         ],
         "outbounds": [ob, {"type": "direct", "tag": "direct"}],
         "route": {"final": tag, "auto_detect_interface": True},
     }
-    probe_path.write_text(json.dumps(cfg), encoding="utf-8")
+    path.write_text(json.dumps(cfg), encoding="utf-8")
     proc = subprocess.Popen(
-        [str(singbox()), "run", "-c", str(probe_path)],
+        [str(singbox()), "run", "-c", str(path)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=CREATE_NO_WINDOW,
@@ -92,7 +102,7 @@ def probe(tag: str, outbound: dict, ip: str) -> tuple[bool, int, str]:
                 "curl.exe",
                 "-4",
                 "--socks5-hostname",
-                f"127.0.0.1:{PROBE_PORT}",
+                f"127.0.0.1:{port}",
                 "-sI",
                 "--connect-timeout",
                 "5",
@@ -115,7 +125,7 @@ def probe(tag: str, outbound: dict, ip: str) -> tuple[bool, int, str]:
             proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
-        probe_path.unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
 
 
 def last_pick() -> str | None:
@@ -198,9 +208,50 @@ def last_result_line() -> str:
     return found
 
 
+def scan_all() -> dict:
+    """Пинг всех vless. Не first-live и не пишет selector / lagom-pick."""
+    cfg = json.loads(_cfg().read_text(encoding="utf-8"))
+    by_tag = {
+        ob.get("tag"): ob
+        for ob in cfg.get("outbounds", [])
+        if isinstance(ob, dict) and ob.get("type") == "vless" and ob.get("tag")
+    }
+    host_map = nodes.hosts()
+    pins: dict[str, str] = {}
+    jobs: list[tuple[str, str, int]] = []
+    rows: list[dict] = []
+    for i, tag in enumerate(by_tag):
+        ip = _ip_for_tag(tag, by_tag[tag], host_map, pins)
+        if not ip:
+            rows.append({"tag": tag, "live": False, "ms": 0, "why": "нет IP"})
+            continue
+        jobs.append((tag, ip, SCAN_PORT + i))
+
+    def one(tag: str, ip: str, port: int) -> dict:
+        path = _dir() / f"_probe_{port}.json"
+        try:
+            live, ms, why = probe(tag, by_tag[tag], ip, port=port, probe_path=path)
+        except (OSError, ValueError) as exc:
+            return {"tag": tag, "live": False, "ms": 0, "why": str(exc)}
+        return {"tag": tag, "live": live, "ms": ms, "why": why}
+
+    if jobs:
+        workers = min(SCAN_WORKERS, len(jobs))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = [pool.submit(one, tag, ip, port) for tag, ip, port in jobs]
+            for fut in as_completed(futs):
+                rows.append(fut.result())
+
+    order = {tag: i for i, tag in enumerate(by_tag)}
+    rows.sort(key=lambda n: order.get(n["tag"], 999))
+    return {"ok": True, "nodes": rows}
+
+
 def main() -> int:
-    for leftover in _dir().glob("_probe*.json"):
-        leftover.unlink(missing_ok=True)
+    # Только свой файл: glob `_probe*.json` сносил `_probe_2100.json` у ping
+    # и на Windows падал PermissionError, если scan держал файл.
+    leftover = _dir() / "_probe.json"
+    leftover.unlink(missing_ok=True)
 
     cfg = json.loads(_cfg().read_text(encoding="utf-8"))
     by_tag = {

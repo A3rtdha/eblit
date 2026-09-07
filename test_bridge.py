@@ -169,5 +169,180 @@ class Lan(unittest.TestCase):
         self.assertIn("инбаунда", result["why"])
 
 
+ROSTER = {
+    "ok": True,
+    "nodes": [{"tag": "Sweden"}],
+    "selected": "Sweden",
+    "pick": {"tag": "Sweden", "manual": True},
+    "favorite": None,
+    "manual": True,
+    "auto": False,
+}
+
+
+class SelectNode(unittest.TestCase):
+    def test_power_off_writes_without_reload(self):
+        b = Bridge()
+        with (
+            patch("app.bridge.nodes.select") as select,
+            patch("app.bridge.roster.stack_nodes", return_value=dict(ROSTER)),
+            patch("app.bridge.singbox.running", return_value=False),
+            patch.object(b, "_job") as job,
+        ):
+            result = b.select_node("Sweden")
+        select.assert_called_once_with("Sweden")
+        job.assert_not_called()
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["restart"])
+        self.assertEqual(result["selected"], "Sweden")
+
+    def test_running_reloads_after_write(self):
+        b = Bridge()
+        order = []
+
+        def select(_tag):
+            order.append("select")
+
+        def job(fn):
+            order.append("job")
+            return {"ok": True, "pending": True}
+
+        with (
+            patch("app.bridge.nodes.select", side_effect=select),
+            patch("app.bridge.roster.stack_nodes", return_value=dict(ROSTER)),
+            patch("app.bridge.singbox.running", return_value=True),
+            patch.object(b, "_job", side_effect=job) as job_mock,
+        ):
+            result = b.select_node("Sweden")
+        self.assertEqual(order, ["select", "job"])
+        job_mock.assert_called_once_with(b._reload)
+        self.assertTrue(result["restart"])
+
+    def test_busy_still_writes_restart_false(self):
+        b = Bridge()
+        with (
+            patch("app.bridge.nodes.select") as select,
+            patch("app.bridge.roster.stack_nodes", return_value=dict(ROSTER)),
+            patch("app.bridge.singbox.running", return_value=True),
+            patch.object(b, "_job", return_value={"ok": False, "pending": False, "why": "уже крутится"}),
+        ):
+            result = b.select_node("Sweden")
+        select.assert_called_once_with("Sweden")
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["restart"])
+
+    def test_auto_clears_manual_not_select(self):
+        b = Bridge()
+        auto_roster = {**ROSTER, "manual": False, "auto": True, "pick": {"tag": "Sweden"}}
+        with (
+            patch("app.bridge.nodes.clear_manual") as clear,
+            patch("app.bridge.nodes.select") as select,
+            patch("app.bridge.roster.stack_nodes", return_value=auto_roster),
+            patch("app.bridge.singbox.running", return_value=False),
+            patch.object(b, "_job") as job,
+        ):
+            result = b.select_node("auto")
+        clear.assert_called_once()
+        select.assert_not_called()
+        job.assert_not_called()
+        self.assertTrue(result["auto"])
+
+
+class Favorite(unittest.TestCase):
+    def test_never_starts_job(self):
+        b = Bridge()
+        with (
+            patch("app.bridge.nodes.set_favorite") as fav,
+            patch("app.bridge.roster.stack_nodes", return_value=dict(ROSTER)),
+            patch.object(b, "_job") as job,
+        ):
+            result = b.set_favorite("Sweden")
+        fav.assert_called_once_with("Sweden")
+        job.assert_not_called()
+        self.assertTrue(result["ok"])
+        self.assertFalse(b._busy)
+
+
+class UpdateBg(unittest.TestCase):
+    def _wait_push(self, b: Bridge, timeout: float = 2.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not b._update_busy:
+                break
+            time.sleep(0.02)
+
+    def test_does_not_set_busy(self):
+        b = Bridge()
+        payload = {
+            "ok": True,
+            "newer": True,
+            "latest": "1.0.1",
+            "asset": "https://example/EblitSetup.exe",
+        }
+        with patch("app.bridge.updates.check", return_value=payload):
+            first = b.check_update_bg()
+            self.assertFalse(b._busy)
+            self.assertTrue(first.get("pending"))
+            self._wait_push(b)
+        self.assertFalse(b._busy)
+        got = b.pull()
+        self.assertTrue(got.get("newer"))
+        self.assertEqual(got.get("kind"), "update")
+
+    def test_404_is_silent_not_newer(self):
+        b = Bridge()
+        b._notify_os = lambda *_a, **_k: None
+        with patch(
+            "app.bridge.updates.check",
+            return_value={"ok": True, "newer": False, "latest": "1.0.0", "asset": "", "why": "релизов ещё нет"},
+        ):
+            b.check_update_bg()
+            self._wait_push(b)
+        self.assertFalse(b._busy)
+        got = b.pull()
+        self.assertTrue(got.get("pending"))
+        self.assertNotEqual(got.get("kind"), "update")
+        self.assertFalse(got.get("newer"))
+
+
+class PingNodes(unittest.TestCase):
+    def _wait(self, b: Bridge, timeout: float = 2.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not b._ping_busy:
+                break
+            time.sleep(0.02)
+
+    def test_second_call_ignored_while_busy(self):
+        b = Bridge()
+        hold = True
+
+        def stuck():
+            while hold:
+                time.sleep(0.02)
+            return {"ok": True, "nodes": []}
+
+        with patch("app.bridge.health.scan_all", side_effect=stuck):
+            first = b.ping_nodes()
+            second = b.ping_nodes()
+        hold = False
+        self.assertTrue(first.get("pending"))
+        self.assertTrue(second.get("ignored") or second.get("pending"))
+        self.assertFalse(b._busy)
+        self._wait(b)
+
+    def test_unexpected_error_still_pushes(self):
+        b = Bridge()
+        with patch("app.bridge.health.scan_all", side_effect=RuntimeError("boom")):
+            b.ping_nodes()
+            self._wait(b)
+        self.assertFalse(b._busy)
+        self.assertFalse(b._ping_busy)
+        got = b.pull()
+        self.assertEqual(got.get("kind"), "ping")
+        self.assertFalse(got.get("ok"))
+        self.assertIn("boom", got.get("why", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@ let powerOn = false;
 let tickTimer = 0;
 let busy = "";
 let serverRefresh = null;
+let applyPing = null;
 let linksLoader = null;
 
 function paintLegs(legs) {
@@ -35,6 +36,10 @@ function applyStack(data) {
       return;
     }
     setVer(data.ok === false ? "fail" : "same", data);
+    return;
+  }
+  if (data.kind === "ping") {
+    if (applyPing) applyPing(data);
     return;
   }
   if (data.kind === "autostart") {
@@ -566,6 +571,11 @@ function bindProbe() {
     return Math.round(n * (UNIT_SEC[u] || 1));
   }
 
+  function persistProbe() {
+    const api = window.pywebview && window.pywebview.api;
+    if (api && api.set_probe_sec) api.set_probe_sec(probeSec);
+  }
+
   function commitFields() {
     const sec = fieldsToSec();
     if (sec === null) {
@@ -573,13 +583,17 @@ function bindProbe() {
       return;
     }
     setThumb(nearestProbeIndex(sec));
+    persistProbe();
   }
 
   function applyFromSeg(clientX, writeFields) {
     const box = seg.getBoundingClientRect();
     const t = box.width ? Math.min(1, Math.max(0, (clientX - box.left) / box.width)) : 0;
     setThumb(t >= 1 ? 5 : Math.floor(t * 6));
-    if (writeFields) writePreset(index);
+    if (writeFields) {
+      writePreset(index);
+      persistProbe();
+    }
   }
 
   setThumb(1);
@@ -605,11 +619,13 @@ function bindProbe() {
         e.preventDefault();
         setThumb(index + 1);
         writePreset(index);
+        persistProbe();
       }
       if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
         e.preventDefault();
         setThumb(index - 1);
         writePreset(index);
+        persistProbe();
       }
     });
   }
@@ -625,6 +641,15 @@ function bindProbe() {
     num.addEventListener("blur", commitFields);
   }
   if (unit) unit.addEventListener("change", commitFields);
+
+  function applySaved(sec) {
+    const n = Number(sec);
+    if (!Number.isFinite(n) || n < 0) return;
+    setThumb(nearestProbeIndex(n));
+    writePreset(index);
+  }
+
+  return applySaved;
 }
 
 const STAR_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6 14.2 8.7l5.6.8-4 3.94.95 5.56L12 16.5l-4.75 2.5.95-5.56-4-3.94 5.6-.8z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
@@ -639,6 +664,7 @@ function bindServers() {
   const paste = document.getElementById("node-paste");
   const composer = document.getElementById("node-composer");
   const btnCompose = document.getElementById("btn-node-compose");
+  const btnPing = document.getElementById("btn-node-ping");
   const btnParse = document.getElementById("btn-node-parse");
   const btnAdd = document.getElementById("btn-node-add");
   const btnCancel = document.getElementById("btn-node-cancel");
@@ -648,6 +674,8 @@ function bindServers() {
   let pending = [];
   let waits = 0;
   let selWanted = "auto";
+  let pingByTag = {};
+  let pinging = false;
 
   function say(text, ok) {
     if (!msg) return;
@@ -682,6 +710,65 @@ function bindServers() {
     setComposerOpen(false);
   }
 
+  function mixGreyToLive(hex, t) {
+    const n = hex.replace("#", "");
+    const live = [parseInt(n.slice(0, 2), 16), parseInt(n.slice(2, 4), 16), parseInt(n.slice(4, 6), 16)];
+    const grey = [255, 255, 255];
+    const ga = 0.18;
+    const m = grey.map((v, i) => Math.round(v + (live[i] - v) * t));
+    const a = +(ga + (1 - ga) * t).toFixed(3);
+    return `rgba(${m[0]}, ${m[1]}, ${m[2]}, ${a})`;
+  }
+
+  function paintDot(dot, ping) {
+    if (!dot) return;
+    if (!ping) {
+      dot.style.background = "";
+      dot.style.boxShadow = "";
+      dot.removeAttribute("title");
+      return;
+    }
+    if (!ping.live) {
+      dot.style.background = "";
+      dot.style.boxShadow = "";
+      dot.title = ping.why || "нет ответа";
+      return;
+    }
+    const lives = Object.values(pingByTag).filter((n) => n && n.live);
+    const root = document.documentElement;
+    const live = getComputedStyle(root).getPropertyValue("--live").trim() || "#8aaeb4";
+    let t = 1;
+    if (lives.length > 1) {
+      const times = lives.map((n) => n.ms);
+      const minMs = Math.min(...times);
+      const maxMs = Math.max(...times);
+      if (maxMs > minMs) {
+        t = 1 - (ping.ms - minMs) / (maxMs - minMs);
+      }
+    }
+    dot.style.background = mixGreyToLive(live, t);
+    dot.style.boxShadow = "none";
+    dot.title = `${ping.ms} мс`;
+  }
+
+  function applyLamps(payload) {
+    const nodes = Array.isArray(payload) ? payload : payload && payload.nodes;
+    if (Array.isArray(nodes)) {
+      pingByTag = {};
+      nodes.forEach((n) => {
+        if (n && n.tag) pingByTag[n.tag] = n;
+      });
+      pinging = false;
+      if (btnPing) btnPing.classList.remove("spin");
+      if (payload && !Array.isArray(payload) && payload.ok === false && payload.why) {
+        say(payload.why, false);
+      }
+    }
+    list.querySelectorAll("li").forEach((li) => {
+      paintDot(li.querySelector(".geo-dot"), pingByTag[li.dataset.tag]);
+    });
+  }
+
   function row(n) {
     const li = document.createElement("li");
     li.classList.toggle("on", !!n.current);
@@ -690,9 +777,17 @@ function bindServers() {
     dot.className = "geo-dot";
     const body = document.createElement("span");
     body.className = "geo-body";
+    const title = document.createElement("span");
+    title.className = "geo-title";
     const name = document.createElement("span");
+    name.className = "geo-name";
     name.textContent = n.tag;
-    body.appendChild(name);
+    const now = document.createElement("span");
+    now.className = "geo-now";
+    now.setAttribute("aria-hidden", "true");
+    now.innerHTML = '<svg viewBox="0 0 24 24"><path d="M9.2 6.4 15.6 12 9.2 17.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    title.append(name, now);
+    body.appendChild(title);
     if (n.host) {
       const host = document.createElement("span");
       host.className = "geo-host";
@@ -721,6 +816,7 @@ function bindServers() {
     ops.append(fav, drop);
     li.append(dot, body, ops);
     if (n.current) li.title = "сейчас через этот сервер";
+    paintDot(dot, pingByTag[n.tag]);
     return li;
   }
 
@@ -738,7 +834,7 @@ function bindServers() {
     sel.replaceChildren();
     const auto = document.createElement("option");
     auto.value = "auto";
-    auto.textContent = data.selected && data.auto ? `Первый живой · ${data.selected}` : "Первый живой";
+    auto.textContent = "Первый живой";
     sel.appendChild(auto);
     nodes.forEach((n) => {
       const opt = document.createElement("option");
@@ -753,10 +849,6 @@ function bindServers() {
   }
 
   async function refresh() {
-    if (busy) {
-      say("жду, пока подключение перепишет config.json…");
-      return;
-    }
     const api = window.pywebview && window.pywebview.api;
     if (!api || !api.nodes) {
       if (waits < 6) {
@@ -840,15 +932,44 @@ function bindServers() {
       const want = sel.value;
       if (want === selWanted) return;
       const api = window.pywebview && window.pywebview.api;
-      if (!api || !api.select_node || busy) {
+      if (!api || !api.select_node) {
         sel.value = selWanted;
         if (combo) paintCombo(combo);
         return;
       }
+      const prev = selWanted;
       selWanted = want;
-      setBusy("reload");
-      await api.select_node(want);
-      armPull();
+      list.querySelectorAll("li").forEach((li) => {
+        li.classList.toggle("on", want !== "auto" && li.dataset.tag === want);
+      });
+      if (combo) paintCombo(combo);
+      try {
+        const result = await api.select_node(want);
+        if (result && result.ok === false) {
+          selWanted = prev;
+          sel.value = prev;
+          if (combo) paintCombo(combo);
+          say(result.why || "не удалось выбрать", false);
+          await refresh();
+          return;
+        }
+        if (result && result.nodes) {
+          const nodes = Array.isArray(result.nodes) ? result.nodes : [];
+          list.replaceChildren(...nodes.map(row));
+          paintSelect(result, nodes);
+          applyLamps();
+          say(note({ ...result, nodes }));
+        }
+        if (result && result.restart) {
+          setBusy("reload");
+          armPull();
+        }
+      } catch (err) {
+        selWanted = prev;
+        sel.value = prev;
+        if (combo) paintCombo(combo);
+        say("не удалось выбрать", false);
+      }
     });
   }
 
@@ -856,6 +977,30 @@ function bindServers() {
     btnCompose.addEventListener("click", () => {
       say("", false);
       setComposerOpen(true);
+    });
+  }
+
+  if (btnPing) {
+    btnPing.addEventListener("click", async () => {
+      if (pinging) return;
+      const api = window.pywebview && window.pywebview.api;
+      if (!api || !api.ping_nodes) return;
+      pinging = true;
+      btnPing.classList.add("spin");
+      try {
+        const res = await api.ping_nodes();
+        if (res && res.ignored) {
+          pinging = false;
+          btnPing.classList.remove("spin");
+          return;
+        }
+        if (res && res.kind === "ping") applyLamps(res);
+        if (res && res.pending) armPull();
+      } catch (err) {
+        pinging = false;
+        btnPing.classList.remove("spin");
+        say("не удалось проверить серверы", false);
+      }
     });
   }
 
@@ -925,12 +1070,13 @@ function bindServers() {
     });
   }
 
+  applyPing = applyLamps;
   return refresh;
 }
 
 document.querySelectorAll(".combo").forEach(mountCombo);
 linksLoader = bindLinks();
-bindProbe();
+const applySavedProbe = bindProbe();
 serverRefresh = bindServers();
 if (serverRefresh) serverRefresh();
 
@@ -1071,14 +1217,22 @@ if (verBtn) {
 }
 
 window.addEventListener("pywebviewready", async () => {
+  const api = window.pywebview && window.pywebview.api;
+  if (api && api.get_probe_sec && applySavedProbe) {
+    const saved = await api.get_probe_sec();
+    if (saved && saved.sec != null) applySavedProbe(saved.sec);
+  }
   armPull();
   await call("status");
   if (serverRefresh) serverRefresh();
-  const api = window.pywebview && window.pywebview.api;
   if (!api) return;
   if (api.version) {
     const ver = await api.version();
     if (ver && ver.version) setVer("idle", { current: ver.version });
+  }
+  if (api.check_update_bg) {
+    api.check_update_bg();
+    armPull();
   }
   if (chkReconnect) sendAutoreconnect();
   if (api.lan_state) paintLan(await api.lan_state());

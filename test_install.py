@@ -132,10 +132,22 @@ class Sequence(Base):
 
     def test_skips_builder_sidecars(self):
         (self.src / "lagom-pick.json").write_text('{"tag": "Sweden"}', encoding="utf-8")
+        (self.src / "lagom-probe.json").write_text('{"sec": 10}', encoding="utf-8")
         (self.src / "split-ui.log").write_text("секрет", encoding="utf-8")
         self.assertEqual(install.run(), 0)
         self.assertFalse((self.dest / "lagom-pick.json").exists())
+        self.assertFalse((self.dest / "lagom-probe.json").exists())
         self.assertFalse((self.dest / "split-ui.log").exists())
+
+    def test_keeps_installed_probe_interval(self):
+        self.dest.mkdir(parents=True)
+        (self.dest / "lagom-probe.json").write_text('{"sec": 300}', encoding="utf-8")
+        (self.src / "lagom-probe.json").write_text('{"sec": 10}', encoding="utf-8")
+        self.assertEqual(install.run(), 0)
+        self.assertEqual(
+            (self.dest / "lagom-probe.json").read_text(encoding="utf-8"),
+            '{"sec": 300}',
+        )
 
     def test_reinstall_replaces_nested_dir(self):
         install.run()

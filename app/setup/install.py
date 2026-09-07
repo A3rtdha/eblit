@@ -26,6 +26,7 @@ _SKIP_PAYLOAD = {
     "lagom-ips.json",
     "lagom-pick.json",
     "lagom-favorite.json",
+    "lagom-probe.json",
 }
 
 STEPS = (

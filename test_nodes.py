@@ -92,6 +92,16 @@ class NodesIO(unittest.TestCase):
         selector = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "LagomVPN")
         self.assertEqual(selector["outbounds"], ["Sweden"])
 
+    def test_set_favorite_does_not_touch_selector(self):
+        """Избранное — только lagom-favorite.json, без selector и без pick."""
+        nodes.set_favorite("Sweden")
+        cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
+        selector = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "LagomVPN")
+        self.assertEqual(selector["outbounds"], ["Sweden"])
+        self.assertFalse((self.dir / nodes.PICK_FILE).is_file())
+        fav = json.loads((self.dir / nodes.FAV_FILE).read_text(encoding="utf-8"))
+        self.assertEqual(fav["tag"], "Sweden")
+
     def test_set_links_updates_route_and_dns(self):
         nodes.set_links(["grok.com", "x.ai"])
         cfg = json.loads(self.cfg.read_text(encoding="utf-8"))

@@ -6,7 +6,7 @@ import threading
 import time
 
 from .log import write
-from .stack import admin, autostart, lan, lifecycle, nodes, probe, roster, singbox, updates
+from .stack import admin, autostart, health, lan, lifecycle, nodes, probe, probe_pref, roster, singbox, updates
 from .version import VERSION
 
 # Watchdog: пока питание включено, сам ловит обрыв и переподключается.
@@ -25,6 +25,8 @@ class Bridge:
         self._busy = False
         self._power = False
         self._tick_busy = False
+        self._ping_busy = False
+        self._update_busy = False
         self._outbox: list[dict] = []
         self._out_lock = threading.Lock()
         self._notify = None
@@ -121,10 +123,14 @@ class Bridge:
                 nodes.clear_manual()
             else:
                 nodes.select(tag)
-            return self._job(self._reload)
+            roster_data = roster.stack_nodes()
         except (OSError, ValueError) as exc:
             write(f"select_node fail: {exc}")
-            return {"ok": False, "why": str(exc), **roster.stack_nodes()}
+            return {**roster.stack_nodes(), "ok": False, "why": str(exc)}
+        restart = False
+        if singbox.running():
+            restart = bool(self._job(self._reload).get("pending"))
+        return {**roster_data, "ok": True, "restart": restart}
 
     def set_favorite(self, tag: str | None) -> dict:
         try:
@@ -178,11 +184,67 @@ class Bridge:
             restart = bool(self._job(self._reload).get("pending"))
         return {"ok": True, **result, "restart": restart}
 
+    def get_probe_sec(self) -> dict:
+        """Интервал UI-тика. Только файл, без _reload / _job."""
+        try:
+            return probe_pref.get()
+        except OSError as exc:
+            write(f"get_probe_sec fail: {exc}")
+            return {"ok": False, "sec": probe_pref.DEFAULT_SEC, "why": str(exc)}
+
+    def set_probe_sec(self, sec) -> dict:
+        try:
+            return probe_pref.set_sec(sec)
+        except OSError as exc:
+            write(f"set_probe_sec fail: {exc}")
+            return {"ok": False, "sec": probe_pref.read_sec(), "why": str(exc)}
+
     def version(self) -> dict:
         return {"ok": True, "version": VERSION}
 
+    def ping_nodes(self) -> dict:
+        if self._ping_busy:
+            return {"ok": True, "pending": True, "ignored": True}
+
+        def run() -> None:
+            try:
+                result = health.scan_all()
+                self._push({**result, "kind": "ping"})
+            except Exception as exc:  # поток: иначе спиннер в UI навсегда
+                write(f"ping fail: {exc}")
+                self._push({"ok": False, "kind": "ping", "nodes": [], "why": str(exc)})
+            finally:
+                self._ping_busy = False
+
+        self._ping_busy = True
+        threading.Thread(target=run, name="eblit-ping", daemon=True).start()
+        return {"ok": True, "pending": True}
+
     def check_update(self) -> dict:
         return updates.check()
+
+    def check_update_bg(self) -> dict:
+        if self._update_busy:
+            return {"ok": True, "pending": True}
+
+        def run() -> None:
+            try:
+                info = updates.check()
+                if info.get("newer") and info.get("asset"):
+                    latest = str(info.get("latest") or "")
+                    self._notify_os(
+                        "Eblit",
+                        f"Доступна {latest} — нажмите версию внизу, чтобы поставить",
+                    )
+                    self._push({**info, "kind": "update"})
+            except (OSError, ValueError) as exc:
+                write(f"update check fail: {exc}")
+            finally:
+                self._update_busy = False
+
+        self._update_busy = True
+        threading.Thread(target=run, name="eblit-update", daemon=True).start()
+        return {"ok": True, "pending": True}
 
     def install_update(self) -> dict:
         return self._job(self._install_update)
@@ -306,7 +368,7 @@ class Bridge:
         with self._out_lock:
             if self._outbox:
                 return self._outbox.pop(0)
-        if self._busy or self._tick_busy:
+        if self._busy or self._tick_busy or self._ping_busy or self._update_busy:
             return {"ok": True, "pending": True, "wait": True}
         return {"ok": True, "pending": True}
 

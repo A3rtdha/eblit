@@ -106,6 +106,11 @@ class TickAsync(unittest.TestCase):
         b._tick_busy = True
         self.assertTrue(b.pull().get("wait"))
 
+    def test_pull_waits_while_sub_busy(self):
+        b = Bridge()
+        b._sub_busy = True
+        self.assertTrue(b.pull().get("wait"))
+
 
 class Nodes(unittest.TestCase):
     def test_passes_roster_through(self):

@@ -27,6 +27,8 @@ _SKIP_PAYLOAD = {
     "lagom-pick.json",
     "lagom-favorite.json",
     "lagom-probe.json",
+    "lagom-sub.json",
+    "eblit-power.json",
 }
 
 STEPS = (
@@ -234,9 +236,27 @@ def _check_singbox() -> bool:
     return False
 
 
+def _repair_empty_selector() -> bool:
+    """Пустой LagomVPN → missing tags. Ноды не трогаем."""
+    path = DEST / "config.json"
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+    if not isinstance(cfg, dict) or not nodes.ensure_selector(cfg):
+        return False
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    _log("починил пустой селектор LagomVPN — ноды на месте")
+    return True
+
+
 def _ensure_config_accepted(*, downloaded: bool) -> None:
     """Свежий sing-box может не принять наш config. Тогда лучше тот, с которым собрано."""
     if _check_singbox():
+        return
+    if _repair_empty_selector() and _check_singbox():
         return
     bundled = payload_dir() / "sing-box.exe"
     if downloaded and bundled.is_file() and bundled.stat().st_size > 0:

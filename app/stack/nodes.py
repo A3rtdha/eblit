@@ -352,6 +352,26 @@ def _set_selector(cfg: dict, tags: list[str]) -> None:
     )
 
 
+def ensure_selector(cfg: dict) -> bool:
+    """Пустой или мёртвый LagomVPN → первый vless или direct. True если писал.
+
+    Не создаёт селектор, если его нет: установщик чинит только уже лежащий файл.
+    """
+    has_sel = any(
+        isinstance(ob, dict) and ob.get("tag") == SELECTOR
+        for ob in cfg.get("outbounds", [])
+    )
+    if not has_sel:
+        return False
+    tags = vless_tags(cfg)
+    selected = _selector_outbounds(cfg)
+    alive = set(tags)
+    if selected and all(t in alive or t == "direct" for t in selected):
+        return False
+    _set_selector(cfg, tags[:1] or ["direct"])
+    return True
+
+
 def add(parsed: dict) -> dict:
     from app.stack import roster
 

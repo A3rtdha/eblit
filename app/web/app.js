@@ -4,6 +4,7 @@ let tickTimer = 0;
 let busy = "";
 let serverRefresh = null;
 let applyPing = null;
+let applySub = null;
 let linksLoader = null;
 
 function paintLegs(legs) {
@@ -40,6 +41,10 @@ function applyStack(data) {
   }
   if (data.kind === "ping") {
     if (applyPing) applyPing(data);
+    return;
+  }
+  if (data.kind === "sub") {
+    if (applySub) applySub(data);
     return;
   }
   if (data.kind === "autostart") {
@@ -665,6 +670,8 @@ function bindServers() {
   const composer = document.getElementById("node-composer");
   const btnCompose = document.getElementById("btn-node-compose");
   const btnPing = document.getElementById("btn-node-ping");
+  const subUrl = document.getElementById("sub-url");
+  const btnSub = document.getElementById("btn-sub-refresh");
   const btnParse = document.getElementById("btn-node-parse");
   const btnAdd = document.getElementById("btn-node-add");
   const btnCancel = document.getElementById("btn-node-cancel");
@@ -676,6 +683,8 @@ function bindServers() {
   let selWanted = "auto";
   let pingByTag = {};
   let pinging = false;
+  let subbing = false;
+  let savedSub = "";
 
   function say(text, ok) {
     if (!msg) return;
@@ -873,6 +882,62 @@ function bindServers() {
     list.replaceChildren(...nodes.map(row));
     paintSelect(data, nodes);
     say(note({ ...data, nodes }));
+    if (subUrl && !subUrl.value) await loadSub();
+  }
+
+  async function loadSub() {
+    const api = window.pywebview && window.pywebview.api;
+    if (!api || !api.sub_get || !subUrl) return;
+    try {
+      const data = await api.sub_get();
+      if (data && data.url) {
+        subUrl.value = data.url;
+        savedSub = data.url;
+      }
+    } catch (err) {
+      /* ignore */
+    }
+  }
+
+  async function saveSub() {
+    const api = window.pywebview && window.pywebview.api;
+    if (!api || !api.sub_set || !subUrl) return false;
+    const url = subUrl.value.trim();
+    if (url === savedSub) return true;
+    try {
+      const result = await api.sub_set(url);
+      if (result && result.ok) {
+        savedSub = url;
+        return true;
+      }
+      say((result && result.why) || "не удалось сохранить ссылку", false);
+      return false;
+    } catch (err) {
+      say("не удалось сохранить ссылку", false);
+      return false;
+    }
+  }
+
+  function paintSub(data) {
+    subbing = false;
+    if (btnSub) btnSub.classList.remove("spin");
+    if (!data) return;
+    if (data.ok === false) {
+      say(data.why || "не удалось обновить подписку", false);
+    } else if (data.skipped) {
+      say(data.why || "нет ссылки подписки", false);
+    } else {
+      const n = Array.isArray(data.nodes) ? data.nodes.length : 0;
+      say(n ? `список обновлён: ${n}` : "список обновлён", true);
+    }
+    if (data.nodes) {
+      const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+      list.replaceChildren(...nodes.map(row));
+      paintSelect(data, nodes);
+      applyLamps();
+    } else {
+      refresh();
+    }
   }
 
   function paintStar(btn, on) {
@@ -1004,8 +1069,45 @@ function bindServers() {
     });
   }
 
+  if (subUrl) {
+    subUrl.addEventListener("change", saveSub);
+    subUrl.addEventListener("blur", saveSub);
+  }
+
+  if (btnSub) {
+    btnSub.addEventListener("click", async () => {
+      if (subbing) return;
+      const api = window.pywebview && window.pywebview.api;
+      if (!api || !api.sub_refresh) return;
+      const saved = await saveSub();
+      if (!saved) return;
+      subbing = true;
+      btnSub.classList.add("spin");
+      try {
+        const res = await api.sub_refresh();
+        if (res && res.ignored) {
+          subbing = false;
+          btnSub.classList.remove("spin");
+          return;
+        }
+        if (res && res.kind === "sub") paintSub(res);
+        if (res && res.pending) armPull();
+      } catch (err) {
+        subbing = false;
+        btnSub.classList.remove("spin");
+        say("не удалось обновить подписку", false);
+      }
+    });
+  }
+
   if (btnParse && parseApi) {
     btnParse.addEventListener("click", () => {
+      const raw = paste ? paste.value.trim() : "";
+      if (/^(https?:\/\/|happ:\/\/)/i.test(raw) && !/vless:\/\//i.test(raw)) {
+        clearPreview();
+        say("это ссылка подписки — вставьте её в поле выше", false);
+        return;
+      }
       const r = parseApi.parseNodes(paste ? paste.value : "");
       if (!r.ok) {
         clearPreview();
@@ -1071,6 +1173,8 @@ function bindServers() {
   }
 
   applyPing = applyLamps;
+  applySub = paintSub;
+  loadSub();
   return refresh;
 }
 
@@ -1223,7 +1327,11 @@ window.addEventListener("pywebviewready", async () => {
     if (saved && saved.sec != null) applySavedProbe(saved.sec);
   }
   armPull();
-  await call("status");
+  const st = await call("status");
+  if (st && st.want_on && !st.power) {
+    setBusy("start");
+    await call("start");
+  }
   if (serverRefresh) serverRefresh();
   if (!api) return;
   if (api.version) {

@@ -115,6 +115,17 @@ class LiveShip(unittest.TestCase):
                     self.assertEqual(cidrs, ["172.19.88.0/30"], msg=name)
 
 
+class ShipSkip(unittest.TestCase):
+    def test_payload_skips_subscription_and_power(self):
+        from app.pack import main as pack_main
+        from app.setup import install
+
+        self.assertIn("lagom-sub.json", install._SKIP_PAYLOAD)
+        self.assertIn("eblit-power.json", install._SKIP_PAYLOAD)
+        src = Path(pack_main.__code__.co_filename).read_text(encoding="utf-8")
+        self.assertIn("eblit-power.json", src)
+
+
 class BadLeg(unittest.TestCase):
     def test_first_bad_wins_box_over_others(self):
         from app.stack import probe

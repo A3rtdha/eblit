@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 import zipfile
@@ -133,11 +134,31 @@ class Sequence(Base):
     def test_skips_builder_sidecars(self):
         (self.src / "lagom-pick.json").write_text('{"tag": "Sweden"}', encoding="utf-8")
         (self.src / "lagom-probe.json").write_text('{"sec": 10}', encoding="utf-8")
+        (self.src / "lagom-sub.json").write_text('{"url": "https://secret"}', encoding="utf-8")
+        (self.src / "eblit-power.json").write_text('{"on": true}', encoding="utf-8")
         (self.src / "split-ui.log").write_text("секрет", encoding="utf-8")
         self.assertEqual(install.run(), 0)
         self.assertFalse((self.dest / "lagom-pick.json").exists())
         self.assertFalse((self.dest / "lagom-probe.json").exists())
+        self.assertFalse((self.dest / "lagom-sub.json").exists())
+        self.assertFalse((self.dest / "eblit-power.json").exists())
         self.assertFalse((self.dest / "split-ui.log").exists())
+
+    def test_keeps_installed_subscription_and_power(self):
+        self.dest.mkdir(parents=True)
+        (self.dest / "lagom-sub.json").write_text('{"url": "https://mine"}', encoding="utf-8")
+        (self.dest / "eblit-power.json").write_text('{"on": true}', encoding="utf-8")
+        (self.src / "lagom-sub.json").write_text('{"url": "https://builder"}', encoding="utf-8")
+        (self.src / "eblit-power.json").write_text('{"on": false}', encoding="utf-8")
+        self.assertEqual(install.run(), 0)
+        self.assertEqual(
+            (self.dest / "lagom-sub.json").read_text(encoding="utf-8"),
+            '{"url": "https://mine"}',
+        )
+        self.assertEqual(
+            (self.dest / "eblit-power.json").read_text(encoding="utf-8"),
+            '{"on": true}',
+        )
 
     def test_keeps_installed_probe_interval(self):
         self.dest.mkdir(parents=True)
@@ -251,6 +272,59 @@ class ConfigCheck(Base):
         with patch.object(install, "_check_singbox", check):
             install._ensure_config_accepted(downloaded=True)
         self.assertEqual((self.dest / "sing-box.exe").read_bytes(), b"bundled")
+
+    def test_empty_selector_repaired_keeps_vless(self):
+        """Живые ноды не сносим: только дописываем тег в пустой LagomVPN."""
+        self.dest.mkdir(parents=True)
+        cfg = {
+            "outbounds": [
+                {"type": "selector", "tag": "LagomVPN", "outbounds": []},
+                {"type": "vless", "tag": "Finland", "server": "node.example"},
+                {"type": "direct", "tag": "direct"},
+            ]
+        }
+        (self.dest / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+        self.assertTrue(install._repair_empty_selector())
+        got = json.loads((self.dest / "config.json").read_text(encoding="utf-8"))
+        sel = next(ob for ob in got["outbounds"] if ob.get("tag") == "LagomVPN")
+        self.assertEqual(sel["outbounds"], ["Finland"])
+        self.assertEqual(
+            [ob["tag"] for ob in got["outbounds"] if ob.get("type") == "vless"],
+            ["Finland"],
+        )
+
+    def test_repair_skips_config_without_selector(self):
+        self.dest.mkdir(parents=True)
+        (self.dest / "config.json").write_text("{}", encoding="utf-8")
+        self.assertFalse(install._repair_empty_selector())
+
+    def test_ensure_repairs_empty_selector_before_bundled(self):
+        (self.src / "sing-box.exe").write_bytes(b"bundled")
+        self.dest.mkdir(parents=True)
+        (self.dest / "sing-box.exe").write_bytes(b"downloaded")
+        (self.dest / "config.json").write_text(
+            json.dumps(
+                {
+                    "outbounds": [
+                        {"type": "selector", "tag": "LagomVPN", "outbounds": []},
+                        {"type": "vless", "tag": "Finland"},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        calls = []
+
+        def check():
+            calls.append(1)
+            cfg = json.loads((self.dest / "config.json").read_text(encoding="utf-8"))
+            sel = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "LagomVPN")
+            return bool(sel.get("outbounds"))
+
+        with patch.object(install, "_check_singbox", check):
+            install._ensure_config_accepted(downloaded=True)
+        self.assertEqual((self.dest / "sing-box.exe").read_bytes(), b"downloaded")
+        self.assertGreaterEqual(len(calls), 2)
 
     def test_both_bad_raises(self):
         (self.src / "sing-box.exe").write_bytes(b"bundled")

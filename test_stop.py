@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app.bridge import Bridge
@@ -41,6 +43,13 @@ class LifecycleStop(unittest.TestCase):
 
 
 class BridgeStop(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="eblit-stop-")
+        self.addCleanup(self.tmp.cleanup)
+        root = patch("app.paths.root", return_value=Path(self.tmp.name))
+        root.start()
+        self.addCleanup(root.stop)
+
     def test_asks_for_admin(self):
         with (
             patch("app.bridge.admin.is_admin", return_value=False),

@@ -6,7 +6,21 @@ import threading
 import time
 
 from .log import write
-from .stack import admin, autostart, health, lan, lifecycle, nodes, probe, probe_pref, roster, singbox, updates
+from .stack import (
+    admin,
+    autostart,
+    health,
+    lan,
+    lifecycle,
+    nodes,
+    probe,
+    probe_pref,
+    power_pref,
+    roster,
+    singbox,
+    subscribe,
+    updates,
+)
 from .version import VERSION
 
 # Watchdog: пока питание включено, сам ловит обрыв и переподключается.
@@ -26,6 +40,7 @@ class Bridge:
         self._power = False
         self._tick_busy = False
         self._ping_busy = False
+        self._sub_busy = False
         self._update_busy = False
         self._outbox: list[dict] = []
         self._out_lock = threading.Lock()
@@ -63,10 +78,13 @@ class Bridge:
     def status(self) -> dict:
         on = singbox.running()
         self._power = on
+        want = power_pref.is_on()
         if not on:
-            return probe.light_tick(power_on=False)
+            result = probe.light_tick(power_on=False)
+            result["want_on"] = want
+            return result
         self._tick_async()
-        return {"ok": True, "power": True}
+        return {"ok": True, "power": True, "want_on": want}
 
     def _tick_async(self) -> dict:
         if self._tick_busy:
@@ -202,6 +220,38 @@ class Bridge:
     def version(self) -> dict:
         return {"ok": True, "version": VERSION}
 
+    def sub_get(self) -> dict:
+        try:
+            return subscribe.get()
+        except OSError as exc:
+            write(f"sub_get fail: {exc}")
+            return {"ok": False, "url": "", "tags": [], "why": str(exc)}
+
+    def sub_set(self, url: str) -> dict:
+        try:
+            return subscribe.set_url(url)
+        except OSError as exc:
+            write(f"sub_set fail: {exc}")
+            return {"ok": False, "url": "", "tags": [], "why": str(exc)}
+
+    def sub_refresh(self) -> dict:
+        if self._sub_busy:
+            return {"ok": True, "pending": True, "ignored": True}
+
+        def run() -> None:
+            try:
+                result = subscribe.refresh()
+                self._push({**result, "kind": "sub"})
+            except Exception as exc:  # поток: иначе спиннер в UI навсегда
+                write(f"sub fail: {exc}")
+                self._push({**roster.stack_nodes(), "ok": False, "kind": "sub", "why": str(exc)})
+            finally:
+                self._sub_busy = False
+
+        self._sub_busy = True
+        threading.Thread(target=run, name="eblit-sub", daemon=True).start()
+        return {"ok": True, "pending": True}
+
     def ping_nodes(self) -> dict:
         if self._ping_busy:
             return {"ok": True, "pending": True, "ignored": True}
@@ -311,10 +361,12 @@ class Bridge:
                 result["why"] = "старт не прошёл"
             if result.get("power"):
                 self._want_on = True
+                self._remember_power(True)
             return result
         result = lifecycle.start()
         if result.get("power"):
             self._want_on = True
+            self._remember_power(True)
         return result
 
     def _stop(self) -> dict:
@@ -333,6 +385,7 @@ class Bridge:
                 result["why"] = "sing-box не остановился"
         if not result.get("power"):
             self._want_on = False
+            self._remember_power(False)
         return result
 
     def _reload(self) -> dict:
@@ -368,7 +421,7 @@ class Bridge:
         with self._out_lock:
             if self._outbox:
                 return self._outbox.pop(0)
-        if self._busy or self._tick_busy or self._ping_busy or self._update_busy:
+        if self._busy or self._tick_busy or self._ping_busy or self._sub_busy or self._update_busy:
             return {"ok": True, "pending": True, "wait": True}
         return {"ok": True, "pending": True}
 
@@ -377,6 +430,12 @@ class Bridge:
             self._outbox.append(payload)
             if len(self._outbox) > 8:
                 del self._outbox[:-8]
+
+    def _remember_power(self, on: bool) -> None:
+        try:
+            power_pref.set_on(on)
+        except OSError as exc:
+            write(f"power pref: {exc}")
 
     def _notify_os(self, title: str, message: str) -> None:
         write(f"notify: {message}")

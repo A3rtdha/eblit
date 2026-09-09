@@ -73,10 +73,12 @@ html, body {
 .node-drop:focus-visible,
 #btn-node-compose:focus-visible,
 #btn-node-ping:focus-visible,
+#btn-sub-refresh:focus-visible,
 #btn-node-parse:focus-visible,
 #btn-node-add:focus-visible,
 #btn-node-cancel:focus-visible,
 #node-paste:focus-visible,
+#sub-url:focus-visible,
 #probe-num:focus-visible {
   outline: 2px solid rgba(138,174,180,.7);
   outline-offset: 3px;
@@ -401,6 +403,7 @@ textarea {
 .field input:not([type]),
 .field textarea,
 #links-input,
+#sub-url,
 #node-paste,
 #probe-num {
   appearance: none;
@@ -420,6 +423,7 @@ textarea {
 .field input:not([type]):hover,
 .field textarea:hover,
 #links-input:hover,
+#sub-url:hover,
 #node-paste:hover,
 #probe-num:hover {
   border-color: rgba(255, 255, 255, 0.2);
@@ -570,6 +574,11 @@ textarea {
   gap: 8px;
   width: 100%;
 }
+.combo-row > input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
 .node-ico,
 .node-drop {
   appearance: none;
@@ -613,7 +622,26 @@ textarea {
   color: var(--live);
   border-color: rgba(255, 255, 255, 0.2);
 }
+.combo-row .node-sub:hover {
+  background: #1c1c1e;
+  color: rgba(255, 255, 255, 0.88);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+#btn-sub-refresh {
+  align-self: stretch;
+  height: auto;
+}
 .node-ping.spin svg { animation: spin 0.9s linear infinite; }
+#btn-sub-refresh.node-sub.spin {
+  color: var(--live);
+}
+#btn-sub-refresh.node-sub.spin svg {
+  animation: sub-wait 0.9s ease-in-out infinite;
+}
+@keyframes sub-wait {
+  0%, 100% { opacity: 0.28; }
+  50% { opacity: 1; }
+}
 
 @keyframes spin {
   to { transform: rotate(360deg); }
@@ -927,6 +955,7 @@ textarea {
     transition: none;
   }
   .node-ping.spin svg { animation: none; }
+  #btn-sub-refresh.node-sub.spin svg { animation: none; opacity: 0.7; }
   .power.on .ring,
   .power.on .stem,
   .power.on .arc,

@@ -3,13 +3,19 @@ from __future__ import annotations
 import time
 
 from app.log import write
-from app.stack import health, lan, probe, singbox, warp
+from app.stack import health, lan, probe, singbox, subscribe, warp
 
 
 def start() -> dict:
     write("подключение: старт")
     singbox.kill()
     time.sleep(2)
+    try:
+        sub = subscribe.refresh()
+        if not sub.get("ok") and not sub.get("skipped"):
+            write(f"подписка: {sub.get('why') or 'не обновилась'}")
+    except (OSError, ValueError) as exc:
+        write(f"подписка: {exc}")
     if health.main() != 0:
         write("health: нет живого сервера — стартуем как есть")
     ok, err = singbox.check()

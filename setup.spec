@@ -1,5 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sys
 from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
 
 root = Path(SPECPATH)
 payload = root / "dist" / "Eblit"

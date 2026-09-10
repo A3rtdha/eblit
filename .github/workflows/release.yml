@@ -26,7 +26,21 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -r requirements-build.txt
       - run: copy config.example.json config.json
+      - name: Fetch sing-box
+        run: |
+          python -c "
+          import zipfile
+          from pathlib import Path
+          from app.setup.fetch import download, latest_singbox_zip
+          z = Path('sing-box.zip')
+          download(latest_singbox_zip(), z, timeout=180)
+          with zipfile.ZipFile(z) as zf:
+              info = next(i for i in zf.infolist() if i.filename.endswith('sing-box.exe') and not i.is_dir())
+              Path('sing-box.exe').write_bytes(zf.read(info))
+          "
       - run: python -m app.pack
+        env:
+          PYTHONUTF8: "1"
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

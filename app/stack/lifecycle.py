@@ -27,6 +27,7 @@ def start() -> dict:
     warp.configure_and_connect()
     if not warp.wait_ready():
         write("WARP :40000 timeout")
+        warp.disconnect()
         result = probe.full_test(power_on=False)
         result.update({"ok": False, "power": False, "why": "WARP :40000 молчит"})
         return result

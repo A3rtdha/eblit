@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from collections.abc import Sequence
 
 CREATE_NO_WINDOW = 0x08000000
@@ -16,9 +17,11 @@ def hidden(
         list(args),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         cwd=cwd,
-        creationflags=CREATE_NO_WINDOW,
+        **({"creationflags": CREATE_NO_WINDOW} if sys.platform == "win32" else {}),
     )
 
 

@@ -37,13 +37,16 @@ class StartOrder(unittest.TestCase):
             patch.object(lifecycle.singbox, "check", return_value=(True, "")),
             patch.object(lifecycle.warp, "configure_and_connect") as warp,
             patch.object(lifecycle.warp, "wait_ready", return_value=True),
+            patch.object(lifecycle.warp, "disconnect") as warp_off,
             patch.object(lifecycle.singbox, "start") as run,
             patch.object(lifecycle.singbox, "wait_tun", return_value=True),
+            patch.object(lifecycle.lan, "sync_firewall"),
             patch.object(lifecycle.probe, "full_test", return_value=dict(ON)),
             patch.object(lifecycle.time, "sleep"),
         ):
             result = lifecycle.start()
         warp.assert_called_once()
+        warp_off.assert_not_called()
         run.assert_called_once()
         self.assertTrue(result["power"])
 
@@ -55,12 +58,14 @@ class StartOrder(unittest.TestCase):
             patch.object(lifecycle.singbox, "check", return_value=(True, "")),
             patch.object(lifecycle.warp, "configure_and_connect"),
             patch.object(lifecycle.warp, "wait_ready", return_value=False),
+            patch.object(lifecycle.warp, "disconnect") as warp_off,
             patch.object(lifecycle.singbox, "start") as run,
             patch.object(lifecycle.probe, "full_test", return_value=OFF),
             patch.object(lifecycle.time, "sleep"),
         ):
             result = lifecycle.start()
         run.assert_not_called()
+        warp_off.assert_called_once()
         self.assertFalse(result["power"])
 
     def test_subscribe_runs_before_health(self):
@@ -83,6 +88,7 @@ class StartOrder(unittest.TestCase):
             patch.object(lifecycle.warp, "wait_ready", return_value=True),
             patch.object(lifecycle.singbox, "start"),
             patch.object(lifecycle.singbox, "wait_tun", return_value=True),
+            patch.object(lifecycle.lan, "sync_firewall"),
             patch.object(lifecycle.probe, "full_test", return_value=dict(ON)),
             patch.object(lifecycle.time, "sleep"),
         ):
@@ -100,6 +106,7 @@ class StartOrder(unittest.TestCase):
             patch.object(lifecycle.warp, "wait_ready", return_value=True),
             patch.object(lifecycle.singbox, "start") as run,
             patch.object(lifecycle.singbox, "wait_tun", return_value=True),
+            patch.object(lifecycle.lan, "sync_firewall"),
             patch.object(lifecycle.probe, "full_test", return_value=dict(ON)),
             patch.object(lifecycle.time, "sleep"),
         ):
@@ -116,6 +123,7 @@ class StartOrder(unittest.TestCase):
             patch.object(lifecycle.singbox, "start") as run,
             patch.object(lifecycle.singbox, "wait_tun", return_value=True),
             patch.object(lifecycle.warp, "configure_and_connect") as warp,
+            patch.object(lifecycle.lan, "sync_firewall"),
             patch.object(lifecycle.probe, "full_test", return_value=dict(ON)),
             patch.object(lifecycle.time, "sleep"),
         ):

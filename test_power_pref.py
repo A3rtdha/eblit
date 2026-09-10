@@ -90,6 +90,26 @@ class BridgePowerPersist(unittest.TestCase):
         self.assertTrue(result["power"])
         self.assertTrue(power_pref.get()["on"])
 
+    def test_elevated_start_waits_for_singbox(self):
+        """UAC-процесс уже поднял стек, а tasklist в GUI ещё пустой — иначе «Выключено» при живом туннеле."""
+        seen = {"n": 0}
+
+        def running():
+            seen["n"] += 1
+            return seen["n"] >= 3
+
+        with (
+            patch("app.bridge.admin.is_admin", return_value=False),
+            patch("app.bridge.admin.elevated", return_value=(True, 0)),
+            patch("app.bridge.singbox.running", side_effect=running),
+            patch("app.bridge.probe.full_test", return_value=dict(ON)),
+            patch("app.bridge.time.sleep"),
+        ):
+            result = Bridge()._start()
+        self.assertTrue(result["power"])
+        self.assertGreaterEqual(seen["n"], 3)
+        self.assertTrue(power_pref.get()["on"])
+
     def test_elevated_fail_does_not_persist_on(self):
         with (
             patch("app.bridge.admin.is_admin", return_value=False),

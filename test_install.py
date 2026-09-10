@@ -359,6 +359,18 @@ class WarpSkip(Base):
         dl.assert_called_once()
         hid.assert_called()
 
+    def test_msiexec_reboot_required_is_success_if_cli_appears(self):
+        """3010 = установлен, нужна перезагрузка. Это не ошибка msiexec."""
+        with (
+            patch.object(install, "warp_ok", return_value=False),
+            patch.object(install, "download"),
+            patch.object(install, "hidden") as hid,
+            patch.object(install, "_wait_warp_cli", return_value=True),
+        ):
+            hid.return_value.returncode = 3010
+            install._install_warp(self.root)
+        hid.assert_called()
+
 
 class Steps(unittest.TestCase):
     def test_run_begins_every_declared_step(self):

@@ -353,9 +353,15 @@ class Bridge:
                     "why": "нужен администратор",
                     **probe.full_test(power_on=False),
                 }
-            result = probe.full_test(power_on=code == 0 or singbox.running())
-            result["power"] = bool(result.get("power")) and singbox.running()
-            if code != 0 and not singbox.running():
+            if code == 0:
+                for _ in range(20):
+                    if singbox.running():
+                        break
+                    time.sleep(0.25)
+            on = singbox.running()
+            result = probe.full_test(power_on=on)
+            result["power"] = on
+            if code != 0 and not on:
                 result["ok"] = False
                 result["power"] = False
                 result["why"] = "старт не прошёл"

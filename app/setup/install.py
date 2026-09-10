@@ -97,11 +97,15 @@ def _begin(key: str) -> None:
 
 
 def warp_ok() -> bool:
-    """Рабочий warp-cli — повод не качать 60 МБ MSI поверх живого WARP."""
+    """Рабочий warp-cli и живой демон — повод не качать 60 МБ MSI поверх живого WARP."""
     try:
-        return hidden([warp.cli_path(), "--version"], timeout=10).returncode == 0
+        if hidden([warp.cli_path(), "--version"], timeout=10).returncode != 0:
+            return False
     except (OSError, subprocess.SubprocessError):
         return False
+    if warp.daemon_ready():
+        return True
+    return warp.wait_daemon(tries=8)
 
 
 def _stop_running() -> bool:
@@ -118,13 +122,7 @@ def _stop_running() -> bool:
 
 
 def _wait_warp_cli(tries: int = 30) -> bool:
-    for _ in range(tries):
-        hidden(["sc", "start", "CloudflareWARP"], timeout=15)
-        cli = warp.cli_path()
-        if hidden([cli, "--version"], timeout=10).returncode == 0:
-            return True
-        time.sleep(2)
-    return False
+    return warp.wait_daemon(tries=tries)
 
 
 def _shortcut(lnk: Path, target: Path) -> None:
@@ -194,7 +192,8 @@ def _install_warp(tmp: Path) -> None:
     download(WARP_MSI_URL, msi, timeout=180)
     _log("ставлю WARP…")
     r = hidden(msiexec_args(msi), timeout=300)
-    if r.returncode != 0 and not _wait_warp_cli(tries=5):
+    # 1641/3010 — успех с перезагрузкой, не «msiexec сломался».
+    if r.returncode not in (0, 1641, 3010) and not _wait_warp_cli(tries=5):
         raise OSError(f"WARP msiexec {r.returncode}")
     if not _wait_warp_cli():
         raise OSError("warp-cli не появился после установки")
@@ -269,6 +268,8 @@ def _ensure_config_accepted(*, downloaded: bool) -> None:
 
 def _configure_warp() -> None:
     _log("настройки WARP: MASQUE, proxy :40000")
+    if not warp.wait_daemon():
+        raise OSError("WARP служба не отвечает")
     if not warp.ensure_registration():
         raise OSError("WARP registration new не прошёл")
     warp.configure()

@@ -79,6 +79,8 @@ html, body {
 #btn-node-cancel:focus-visible,
 #node-paste:focus-visible,
 #sub-url:focus-visible,
+#first-sub:focus-visible,
+#btn-first-go:focus-visible,
 #probe-num:focus-visible {
   outline: 2px solid rgba(138,174,180,.7);
   outline-offset: 3px;
@@ -404,6 +406,7 @@ textarea {
 .field textarea,
 #links-input,
 #sub-url,
+#first-sub,
 #node-paste,
 #probe-num {
   appearance: none;
@@ -424,6 +427,7 @@ textarea {
 .field textarea:hover,
 #links-input:hover,
 #sub-url:hover,
+#first-sub:hover,
 #node-paste:hover,
 #probe-num:hover {
   border-color: rgba(255, 255, 255, 0.2);
@@ -909,16 +913,52 @@ textarea {
 }
 #lan-addr:hover { border-color: rgba(255, 255, 255, 0.12); }
 
-/* Гайд: тихая проза, читаемее подсказок; маршрут — единственный акцент. */
-.guide .block p {
+/* Гайд и первый запуск: тихая проза, читаемее подсказок. */
+.guide .block p,
+.first .block p {
   font-size: 13px;
   line-height: 1.6;
   color: rgba(255, 255, 255, 0.62);
   margin: 0;
 }
-.guide .block p b {
+.guide .block p b,
+.first .block p b {
   color: rgba(255, 255, 255, 0.82);
   font-weight: 550;
+}
+.first-n {
+  color: var(--live);
+  font-weight: 600;
+  margin-right: 0.55em;
+}
+.first .field { margin: 12px 0 0; }
+.first-err {
+  margin: 12px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fault);
+}
+.first-go {
+  display: block;
+  width: 100%;
+  margin-top: 14px;
+  border: 0;
+  border-radius: 12px;
+  padding: 12px 16px;
+  background: var(--live);
+  color: #0c1213;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.first-go:hover { filter: brightness(1.06); }
+.first-go:active { transform: translateY(1px); }
+.first-go:disabled {
+  cursor: default;
+  opacity: 0.55;
+  filter: none;
+  transform: none;
 }
 .route {
   margin: 12px 0 0;
@@ -951,7 +991,8 @@ textarea {
   #btn-node-cancel,
   .node-ico,
   .node-fav,
-  .node-drop {
+  .node-drop,
+  .first-go {
     transition: none;
   }
   .node-ping.spin svg { animation: none; }

@@ -74,6 +74,14 @@ function armTick() {
   }, Math.max(10, probeSec) * 1000);
 }
 
+let syncTimer = 0;
+function armSyncPower() {
+  if (syncTimer) return;
+  syncTimer = window.setInterval(() => {
+    if (!busy) call("sync_power");
+  }, 5000);
+}
+
 async function call(name, arg) {
   const api = window.pywebview && window.pywebview.api;
   if (!api || !api[name]) {
@@ -125,12 +133,14 @@ const ROUTES = {
   "#/": "home",
   "#/settings": "settings",
   "#/guide": "guide",
+  "#/first": "first",
 };
 
 const TITLES = {
   home: "Eblit",
   settings: "Настройки",
   guide: "Что это и как работает",
+  first: "Сначала",
 };
 
 const power = document.getElementById("power");
@@ -142,6 +152,7 @@ const views = {
   home: document.getElementById("view-home"),
   settings: document.getElementById("view-settings"),
   guide: document.getElementById("view-guide"),
+  first: document.getElementById("view-first"),
 };
 
 function routeName() {
@@ -151,10 +162,10 @@ function routeName() {
 function applyRoute() {
   const name = routeName();
   Object.entries(views).forEach(([key, el]) => {
-    el.hidden = key !== name;
+    if (el) el.hidden = key !== name;
   });
   title.textContent = TITLES[name] || "Eblit";
-  back.hidden = name === "home";
+  back.hidden = name === "home" || name === "first";
   if (name === "settings") {
     if (linksLoader) linksLoader();
     if (serverRefresh) serverRefresh();
@@ -271,6 +282,10 @@ window.addEventListener("keydown", (e) => {
     openCombo.querySelector(".combo-btn")?.focus();
     return;
   }
+  if (routeName() === "first") {
+    e.preventDefault();
+    return;
+  }
   if (routeName() !== "home") {
     e.preventDefault();
     goHome();
@@ -281,7 +296,7 @@ window.addEventListener("mousedown", (e) => {
   if (e.button === 3 || e.button === 4) e.preventDefault();
 });
 window.addEventListener("mouseup", (e) => {
-  if (e.button === 3 && routeName() !== "home") {
+  if (e.button === 3 && routeName() !== "home" && routeName() !== "first") {
     e.preventDefault();
     goHome();
   }
@@ -655,6 +670,101 @@ function bindProbe() {
   }
 
   return applySaved;
+}
+
+const FIRST_KEY = "eblit-first";
+
+function seenFirst() {
+  try {
+    return localStorage.getItem(FIRST_KEY) === "1";
+  } catch (err) {
+    return true;
+  }
+}
+
+function markFirst() {
+  try {
+    localStorage.setItem(FIRST_KEY, "1");
+  } catch (err) {
+    /* private mode — покажем снова */
+  }
+}
+
+function firstSay(text) {
+  const el = document.getElementById("first-msg");
+  if (!el) return;
+  if (!text) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  el.hidden = false;
+  el.textContent = text;
+}
+
+async function paintFirst() {
+  const api = window.pywebview && window.pywebview.api;
+  const need = document.getElementById("first-need-sub");
+  const have = document.getElementById("first-have-sub");
+  const input = document.getElementById("first-sub");
+  let nodes = [];
+  try {
+    const data = api && api.nodes ? await api.nodes() : null;
+    nodes = data && Array.isArray(data.nodes) ? data.nodes : [];
+  } catch (err) {
+    nodes = [];
+  }
+  const empty = !nodes.length;
+  if (need) need.hidden = !empty;
+  if (have) have.hidden = empty;
+  if (empty && input && api && api.sub_get) {
+    try {
+      const sub = await api.sub_get();
+      if (sub && sub.url) input.value = sub.url;
+    } catch (err) {
+      /* ignore */
+    }
+  }
+}
+
+function bindFirst() {
+  const btn = document.getElementById("btn-first-go");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    if (busy) return;
+    const api = window.pywebview && window.pywebview.api;
+    const need = document.getElementById("first-need-sub");
+    const input = document.getElementById("first-sub");
+    firstSay("");
+    if (need && !need.hidden) {
+      const url = input ? input.value.trim() : "";
+      if (!url) {
+        firstSay("нужна ссылка подписки");
+        if (input) input.focus();
+        return;
+      }
+      if (!api || !api.sub_set) {
+        firstSay("не удалось сохранить ссылку");
+        return;
+      }
+      try {
+        const saved = await api.sub_set(url);
+        if (!saved || !saved.ok) {
+          firstSay((saved && saved.why) || "нужен https://");
+          return;
+        }
+      } catch (err) {
+        firstSay("не удалось сохранить ссылку");
+        return;
+      }
+    }
+    btn.disabled = true;
+    markFirst();
+    go("#/");
+    if (powerOn) return;
+    setBusy("start");
+    await call("start");
+  });
 }
 
 const STAR_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6 14.2 8.7l5.6.8-4 3.94.95 5.56L12 16.5l-4.75 2.5.95-5.56-4-3.94 5.6-.8z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
@@ -1183,6 +1293,7 @@ linksLoader = bindLinks();
 const applySavedProbe = bindProbe();
 serverRefresh = bindServers();
 if (serverRefresh) serverRefresh();
+bindFirst();
 
 const chkTick = document.getElementById("chk-tick");
 if (chkTick) chkTick.addEventListener("change", armTick);
@@ -1327,8 +1438,19 @@ window.addEventListener("pywebviewready", async () => {
     if (saved && saved.sec != null) applySavedProbe(saved.sec);
   }
   armPull();
+  armSyncPower();
+  if (api && api.ensure_warp_gui) {
+    try {
+      await api.ensure_warp_gui();
+    } catch (err) {
+      /* окно Cloudflare не критично для старта UI */
+    }
+  }
   const st = await call("status");
-  if (st && st.want_on && !st.power) {
+  if (!seenFirst()) {
+    await paintFirst();
+    go("#/first");
+  } else if (st && st.want_on && !st.power) {
     setBusy("start");
     await call("start");
   }

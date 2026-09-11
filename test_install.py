@@ -413,5 +413,31 @@ class Uninstall(Base):
         self.assertTrue(any("остал" in line.lower() or "занято" in line for line in self.logs))
 
 
+class WarpCfg(unittest.TestCase):
+    def test_connects_after_configure(self):
+        with (
+            patch.object(install.warp, "wait_daemon", return_value=True),
+            patch.object(install.warp, "ensure_registration", return_value=True),
+            patch.object(install.warp, "configure_and_connect") as connect,
+            patch.object(install.warp, "wait_ready", return_value=True) as ready,
+            patch.object(install, "_log"),
+        ):
+            install._configure_warp()
+        connect.assert_called_once()
+        ready.assert_called_once()
+        _, kwargs = ready.call_args
+        self.assertLessEqual(kwargs.get("tries", 30), 5)
+
+    def test_timeout_does_not_raise(self):
+        with (
+            patch.object(install.warp, "wait_daemon", return_value=True),
+            patch.object(install.warp, "ensure_registration", return_value=True),
+            patch.object(install.warp, "configure_and_connect"),
+            patch.object(install.warp, "wait_ready", return_value=False),
+            patch.object(install, "_log"),
+        ):
+            install._configure_warp()
+
+
 if __name__ == "__main__":
     unittest.main()

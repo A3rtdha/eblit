@@ -13,6 +13,7 @@ SOCKS = "127.0.0.1:40000"
 SPOTIFY = "https://open.spotify.com"
 WAIT_TRIES = 30
 _SERVICES = ("CloudflareWARP", "warp-svc")
+GUI_NAME = "Cloudflare WARP.exe"
 
 
 def _program_files_cli() -> Path:
@@ -25,6 +26,22 @@ def cli_path() -> str:
     if pf.is_file():
         return str(pf)
     return "warp-cli"
+
+
+def gui_path() -> Path:
+    return _program_files_cli().parent / GUI_NAME
+
+
+def open_gui() -> bool:
+    """Окно в сессии пользователя. Не hidden: иначе GUI не видно."""
+    exe = gui_path()
+    if not exe.is_file():
+        return False
+    try:
+        subprocess.Popen([str(exe)], cwd=str(exe.parent))
+    except OSError:
+        return False
+    return True
 
 
 def _run(*args: str, timeout: float = 30) -> subprocess.CompletedProcess[str]:
@@ -145,8 +162,8 @@ def socks_ok() -> bool:
     return has_http(r.stdout)
 
 
-def wait_ready() -> bool:
-    for _ in range(WAIT_TRIES):
+def wait_ready(tries: int = WAIT_TRIES) -> bool:
+    for _ in range(max(1, int(tries))):
         if socks_ok():
             return True
         time.sleep(2)

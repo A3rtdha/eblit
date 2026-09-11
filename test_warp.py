@@ -151,5 +151,59 @@ class Daemon(unittest.TestCase):
             self.assertTrue(warp.daemon_ready())
 
 
+class GuiPath(unittest.TestCase):
+    def test_sits_next_to_cli(self):
+        fake = Path(r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe")
+        with patch.object(warp, "_program_files_cli", return_value=fake):
+            self.assertEqual(
+                warp.gui_path(),
+                Path(r"C:\Program Files\Cloudflare\Cloudflare WARP\Cloudflare WARP.exe"),
+            )
+
+
+class OpenGui(unittest.TestCase):
+    def test_missing_exe_is_false(self):
+        missing = Path(r"C:\missing\Cloudflare WARP.exe")
+        with patch.object(warp, "gui_path", return_value=missing):
+            self.assertFalse(warp.open_gui())
+
+    def test_popen_oserror_is_false(self):
+        exe = Path(r"C:\Program Files\Cloudflare\Cloudflare WARP\Cloudflare WARP.exe")
+        with (
+            patch.object(warp, "gui_path", return_value=exe),
+            patch.object(Path, "is_file", return_value=True),
+            patch("app.stack.warp.subprocess.Popen", side_effect=OSError("нет")),
+        ):
+            self.assertFalse(warp.open_gui())
+
+    def test_popen_visible_not_hidden(self):
+        from app.stack.run import CREATE_NO_WINDOW
+
+        exe = Path(r"C:\Program Files\Cloudflare\Cloudflare WARP\Cloudflare WARP.exe")
+        with (
+            patch.object(warp, "gui_path", return_value=exe),
+            patch.object(Path, "is_file", return_value=True),
+            patch("app.stack.warp.subprocess.Popen") as popen,
+            patch("app.stack.warp.hidden") as hidden,
+        ):
+            self.assertTrue(warp.open_gui())
+        hidden.assert_not_called()
+        popen.assert_called_once()
+        args, kwargs = popen.call_args
+        self.assertEqual(args[0][0], str(exe))
+        self.assertNotEqual(kwargs.get("creationflags", 0), CREATE_NO_WINDOW)
+
+
+class WaitReady(unittest.TestCase):
+    def test_short_tries_stops_early(self):
+        with (
+            patch.object(warp, "socks_ok", return_value=False) as socks,
+            patch.object(warp.time, "sleep") as sleep,
+        ):
+            self.assertFalse(warp.wait_ready(tries=3))
+        self.assertEqual(socks.call_count, 3)
+        self.assertEqual(sleep.call_count, 3)
+
+
 if __name__ == "__main__":
     unittest.main()

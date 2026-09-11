@@ -20,6 +20,7 @@ from .stack import (
     singbox,
     subscribe,
     updates,
+    warp,
 )
 from .version import VERSION
 
@@ -85,6 +86,20 @@ class Bridge:
             return result
         self._tick_async()
         return {"ok": True, "power": True, "want_on": want}
+
+    def sync_power(self) -> dict:
+        """Пока не busy, подпись = жив ли sing-box. Tick по-прежнему без power."""
+        if self._busy:
+            return {"ok": True}
+        on = singbox.running()
+        if on == self._power:
+            return {"ok": True}
+        self._power = on
+        if on:
+            self._want_on = True
+            self._tick_async()
+            return {"ok": True, "power": True}
+        return probe.light_tick(power_on=False)
 
     def _tick_async(self) -> dict:
         if self._tick_busy:
@@ -343,7 +358,17 @@ class Bridge:
             self._window.destroy()
         return {"ok": True, "line": ""}
 
+    def ensure_warp_gui(self) -> dict:
+        """Окно Cloudflare сразу, без зонда :40000 — иначе на первом запуске его нет."""
+        try:
+            opened = bool(warp.open_gui())
+            return {"ok": True, "opened": opened}
+        except (OSError, ValueError) as exc:
+            write(f"warp gui: {exc}")
+            return {"ok": False, "opened": False, "why": str(exc)}
+
     def _start(self) -> dict:
+        warp.open_gui()
         if not admin.is_admin():
             launched, code = admin.elevated(["start"])
             if not launched:

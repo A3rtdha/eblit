@@ -70,6 +70,9 @@ class BridgePowerPersist(unittest.TestCase):
         self.root_patch.start()
         self.addCleanup(self.root_patch.stop)
         self.addCleanup(self.tmp.cleanup)
+        gui = patch("app.bridge.warp.open_gui", return_value=True)
+        gui.start()
+        self.addCleanup(gui.stop)
 
     def test_start_fail_does_not_persist_on(self):
         with (

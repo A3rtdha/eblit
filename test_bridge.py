@@ -37,7 +37,10 @@ class Recursion(unittest.TestCase):
 
     def test_methods_still_exposed(self):
         names = {n for n in dir(Bridge()) if not n.startswith("_")}
-        self.assertLessEqual({"start", "stop", "reload", "test", "tick", "status", "pull"}, names)
+        self.assertLessEqual(
+            {"start", "stop", "reload", "test", "tick", "status", "sync_power", "pull"},
+            names,
+        )
 
 
 class StatusOff(unittest.TestCase):
@@ -72,6 +75,103 @@ class StatusOnDoesNotBlock(unittest.TestCase):
         self.assertTrue(result["power"])
         self.assertNotIn("legs", result)
         self.assertLess(elapsed, 0.4)
+
+
+class StartOpensWarpGui(unittest.TestCase):
+    def test_opens_gui_before_elevate(self):
+        b = Bridge()
+        with (
+            patch("app.bridge.warp.open_gui") as gui,
+            patch("app.bridge.admin.is_admin", return_value=False),
+            patch("app.bridge.admin.elevated", return_value=(False, 1)),
+            patch("app.bridge.probe.full_test", return_value={"ok": False, "power": False, "legs": {}}),
+            patch("app.bridge.singbox.running", return_value=False),
+        ):
+            b._start()
+        gui.assert_called_once()
+
+    def test_opens_gui_even_if_socks_already_up(self):
+        """Первый запуск не должен ждать :40000 — иначе окно Cloudflare так и не вылезет."""
+        b = Bridge()
+        with (
+            patch("app.bridge.warp.socks_ok", return_value=True),
+            patch("app.bridge.warp.open_gui") as gui,
+            patch("app.bridge.admin.is_admin", return_value=True),
+            patch("app.bridge.lifecycle.start", return_value={"ok": True, "power": True, "legs": {}}),
+        ):
+            b._start()
+        gui.assert_called_once()
+
+    def test_ensure_gui_opens_without_socks_probe(self):
+        with (
+            patch("app.bridge.warp.socks_ok") as socks,
+            patch("app.bridge.warp.open_gui", return_value=True) as gui,
+        ):
+            result = Bridge().ensure_warp_gui()
+        socks.assert_not_called()
+        gui.assert_called_once()
+        self.assertTrue(result["opened"])
+
+    def test_ensure_gui_open_fail_is_honest(self):
+        with patch("app.bridge.warp.open_gui", return_value=False):
+            result = Bridge().ensure_warp_gui()
+        self.assertFalse(result["opened"])
+        self.assertTrue(result["ok"])
+
+
+class SyncPower(unittest.TestCase):
+    def test_running_while_ui_off(self):
+        b = Bridge()
+        b._power = False
+        with (
+            patch("app.bridge.singbox.running", return_value=True),
+            patch.object(b, "_tick_async", return_value={"ok": True, "pending": True}) as tick,
+        ):
+            result = b.sync_power()
+        self.assertTrue(result["power"])
+        self.assertTrue(b._power)
+        self.assertTrue(b._want_on)
+        tick.assert_called_once()
+
+    def test_dead_while_ui_on(self):
+        b = Bridge()
+        b._power = True
+        off = {
+            "ok": True,
+            "power": False,
+            "legs": {
+                "box": {"state": "off", "why": "питание выключено"},
+                "warp": {"state": "off", "why": "питание выключено"},
+                "node": {"state": "off", "why": "питание выключено"},
+            },
+        }
+        with (
+            patch("app.bridge.singbox.running", return_value=False),
+            patch("app.bridge.probe.light_tick", return_value=off),
+        ):
+            result = b.sync_power()
+        self.assertFalse(result["power"])
+        self.assertFalse(b._power)
+        self.assertEqual(result["legs"]["box"]["state"], "off")
+
+    def test_unchanged_omits_power(self):
+        b = Bridge()
+        b._power = False
+        with patch("app.bridge.singbox.running", return_value=False):
+            result = b.sync_power()
+        self.assertNotIn("power", result)
+        self.assertTrue(result["ok"])
+        self.assertFalse(b._power)
+
+    def test_busy_omits_power(self):
+        b = Bridge()
+        b._power = False
+        b._busy = True
+        with patch("app.bridge.singbox.running", return_value=True):
+            result = b.sync_power()
+        self.assertNotIn("power", result)
+        self.assertFalse(b._power)
+        self.assertFalse(b._want_on)
 
 
 class TickAsync(unittest.TestCase):

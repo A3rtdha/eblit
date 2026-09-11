@@ -272,7 +272,9 @@ def _configure_warp() -> None:
         raise OSError("WARP служба не отвечает")
     if not warp.ensure_registration():
         raise OSError("WARP registration new не прошёл")
-    warp.configure()
+    warp.configure_and_connect()
+    if not warp.wait_ready(tries=5):
+        _log("WARP :40000 ещё молчит — дожмёт Eblit")
 
 
 def _register_uninstall() -> None:

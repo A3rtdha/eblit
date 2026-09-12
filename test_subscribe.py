@@ -658,6 +658,16 @@ class BridgeSub(unittest.TestCase):
         self.addCleanup(self.root_patch.stop)
         self.addCleanup(self.tmp.cleanup)
 
+    def test_sub_pull_is_sync_not_job(self):
+        api = Bridge()
+        api._job = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("_job"))
+        with patch.object(subscribe, "refresh", return_value={"ok": True, "nodes": [{"tag": "a"}]}):
+            got = api.sub_pull()
+        self.assertTrue(got.get("ok"))
+        self.assertEqual(got["nodes"][0]["tag"], "a")
+        self.assertFalse(got.get("pending"))
+        self.assertFalse(api._busy)
+
     def test_sub_refresh_does_not_use_job(self):
         api = Bridge()
         api._job = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("_job"))

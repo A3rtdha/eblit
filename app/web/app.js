@@ -30,13 +30,16 @@ function applyStack(data) {
   if (data.kind === "update") {
     if (data.started) {
       setVer("go", data);
+      paintUpdateAsk("go", data);
       return;
     }
     if (data.newer) {
       setVer("new", data);
+      if (data.must) lockUpdate(data);
       return;
     }
     setVer(data.ok === false ? "fail" : "same", data);
+    paintUpdateAsk(data.ok === false ? "fail" : "same", data);
     return;
   }
   if (data.kind === "ping") {
@@ -264,7 +267,7 @@ document.addEventListener("mousedown", (e) => {
 // pywebview easy_drag слушает mousedown на window и тянет окно. В полях ввода это
 // съедало выделение мышью — гасим всплытие, поведение самого поля остаётся.
 document.addEventListener("mousedown", (e) => {
-  if (e.target.closest("input, textarea")) e.stopPropagation();
+  if (e.target.closest("input, textarea, .ask")) e.stopPropagation();
 });
 
 back.addEventListener("click", (e) => {
@@ -275,6 +278,10 @@ back.addEventListener("click", (e) => {
 
 window.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
+  if (updateLocked()) {
+    e.preventDefault();
+    return;
+  }
   const openCombo = document.querySelector(".combo.open");
   if (openCombo) {
     e.preventDefault();
@@ -296,6 +303,10 @@ window.addEventListener("mousedown", (e) => {
   if (e.button === 3 || e.button === 4) e.preventDefault();
 });
 window.addEventListener("mouseup", (e) => {
+  if (e.button === 3 && updateLocked()) {
+    e.preventDefault();
+    return;
+  }
   if (e.button === 3 && routeName() !== "home" && routeName() !== "first") {
     e.preventDefault();
     goHome();
@@ -365,11 +376,13 @@ document.querySelectorAll("[data-action]").forEach((btn) => {
 document.getElementById("btn-close").addEventListener("click", (e) => {
   e.preventDefault();
   e.stopPropagation();
+  if (updateLocked()) return;
   call("quit");
 });
 document.getElementById("btn-min").addEventListener("click", (e) => {
   e.preventDefault();
   e.stopPropagation();
+  if (updateLocked()) return;
   const tray = document.getElementById("chk-tray");
   call(tray && !tray.checked ? "minimize" : "hide");
 });
@@ -1028,17 +1041,20 @@ function bindServers() {
     }
   }
 
-  function paintSub(data) {
+  function paintSub(data, opts) {
+    const quiet = !!(opts && opts.quiet);
     subbing = false;
     if (btnSub) btnSub.classList.remove("spin");
     if (!data) return;
-    if (data.ok === false) {
-      say(data.why || "не удалось обновить подписку", false);
-    } else if (data.skipped) {
-      say(data.why || "нет ссылки подписки", false);
-    } else {
-      const n = Array.isArray(data.nodes) ? data.nodes.length : 0;
-      say(n ? `список обновлён: ${n}` : "список обновлён", true);
+    if (!quiet) {
+      if (data.ok === false) {
+        say(data.why || "не удалось обновить подписку", false);
+      } else if (data.skipped) {
+        say(data.why || "нет ссылки подписки", false);
+      } else {
+        const n = Array.isArray(data.nodes) ? data.nodes.length : 0;
+        say(n ? `список обновлён: ${n}` : "список обновлён", true);
+      }
     }
     if (data.nodes) {
       const nodes = Array.isArray(data.nodes) ? data.nodes : [];
@@ -1378,7 +1394,52 @@ if (chkTray) {
 }
 
 const verBtn = document.getElementById("ver");
+const askUpdate = document.getElementById("ask-update");
+const askUpdateText = document.getElementById("ask-update-text");
+const askUpdateGo = document.getElementById("ask-update-go");
 let verMode = "idle";
+
+function updateLocked() {
+  return !!(askUpdate && !askUpdate.hidden);
+}
+
+function lockUpdate(data) {
+  if (!askUpdate) return;
+  const latest = (data && data.latest) || "";
+  if (askUpdateText) {
+    askUpdateText.textContent = latest
+      ? `Доступна ${latest}. Обновить?`
+      : "Доступна новая версия. Обновить?";
+  }
+  askUpdate.hidden = false;
+  paintUpdateAsk("new", data);
+}
+
+function paintUpdateAsk(mode, data) {
+  if (!updateLocked() || !askUpdateGo) return;
+  if (mode === "go") {
+    askUpdateGo.disabled = true;
+    askUpdateGo.textContent = "Ставлю…";
+    return;
+  }
+  askUpdateGo.disabled = false;
+  askUpdateGo.textContent = mode === "fail" ? "Повторить" : "Обновить";
+  if (mode === "fail" && askUpdateText) {
+    askUpdateText.textContent = (data && data.why) || "не вышло, попробуй ещё";
+  }
+}
+
+async function startUpdate() {
+  const api = window.pywebview && window.pywebview.api;
+  if (!api || !api.install_update) return;
+  if (verMode === "wait" || verMode === "go") return;
+  setVer("go", { current: verBtn && verBtn.dataset.current });
+  paintUpdateAsk("go");
+  const res = await api.install_update();
+  applyStack(res);
+  if (res && res.pending) armPull();
+}
+
 function setVer(mode, data) {
   verMode = mode;
   if (!verBtn) return;
@@ -1406,17 +1467,22 @@ function setVer(mode, data) {
   else if (mode === "fail") verBtn.title = (data && data.why) || "не достучался";
   else verBtn.title = "проверить обновление";
 }
+if (askUpdateGo) {
+  askUpdateGo.addEventListener("click", () => {
+    startUpdate();
+  });
+}
 if (verBtn) {
   verBtn.addEventListener("click", async () => {
+    if (updateLocked()) {
+      startUpdate();
+      return;
+    }
     const api = window.pywebview && window.pywebview.api;
     if (!api) return;
     if (verMode === "wait" || verMode === "go") return;
     if (verMode === "new") {
-      if (!api.install_update) return;
-      setVer("go", { current: verBtn.dataset.current });
-      const res = await api.install_update();
-      applyStack(res);
-      if (res && res.pending) armPull();
+      startUpdate();
       return;
     }
     if (!api.check_update) return;
@@ -1426,8 +1492,12 @@ if (verBtn) {
       setVer("fail", { why: "нет ответа" });
       return;
     }
-    if (res.newer) setVer("new", res);
-    else setVer(res.ok === false ? "fail" : "same", res);
+    if (res.newer) {
+      setVer("new", res);
+      lockUpdate(res);
+    } else {
+      setVer(res.ok === false ? "fail" : "same", res);
+    }
   });
 }
 
@@ -1439,14 +1509,15 @@ window.addEventListener("pywebviewready", async () => {
   }
   armPull();
   armSyncPower();
-  if (api && api.ensure_warp_gui) {
+  const st = await call("status");
+  if (api && api.sub_pull) {
     try {
-      await api.ensure_warp_gui();
+      const sub = await api.sub_pull();
+      if (applySub && sub && !sub.skipped) applySub(sub, { quiet: true });
     } catch (err) {
-      /* окно Cloudflare не критично для старта UI */
+      /* нет сети — старый список, подключение всё равно */
     }
   }
-  const st = await call("status");
   if (!seenFirst()) {
     await paintFirst();
     go("#/first");

@@ -77,30 +77,43 @@ class StatusOnDoesNotBlock(unittest.TestCase):
         self.assertLess(elapsed, 0.4)
 
 
-class StartOpensWarpGui(unittest.TestCase):
-    def test_opens_gui_before_elevate(self):
+class StartDoesNotOpenWarpGui(unittest.TestCase):
+    def test_does_not_open_gui_before_elevate(self):
         b = Bridge()
         with (
             patch("app.bridge.warp.open_gui") as gui,
+            patch("app.bridge.subscribe.refresh", return_value={"ok": True, "skipped": True}),
             patch("app.bridge.admin.is_admin", return_value=False),
             patch("app.bridge.admin.elevated", return_value=(False, 1)),
             patch("app.bridge.probe.full_test", return_value={"ok": False, "power": False, "legs": {}}),
             patch("app.bridge.singbox.running", return_value=False),
         ):
             b._start()
-        gui.assert_called_once()
+        gui.assert_not_called()
 
-    def test_opens_gui_even_if_socks_already_up(self):
-        """Первый запуск не должен ждать :40000 — иначе окно Cloudflare так и не вылезет."""
+    def test_does_not_open_gui_when_already_admin(self):
         b = Bridge()
         with (
-            patch("app.bridge.warp.socks_ok", return_value=True),
             patch("app.bridge.warp.open_gui") as gui,
+            patch("app.bridge.subscribe.refresh", return_value={"ok": True, "skipped": True}),
             patch("app.bridge.admin.is_admin", return_value=True),
             patch("app.bridge.lifecycle.start", return_value={"ok": True, "power": True, "legs": {}}),
         ):
             b._start()
-        gui.assert_called_once()
+        gui.assert_not_called()
+
+    def test_refreshes_sub_before_elevate(self):
+        b = Bridge()
+        with (
+            patch("app.bridge.subscribe.refresh", return_value={"ok": True, "nodes": []}) as refresh,
+            patch("app.bridge.admin.is_admin", return_value=False),
+            patch("app.bridge.admin.elevated", return_value=(False, 1)) as elev,
+            patch("app.bridge.probe.full_test", return_value={"ok": False, "power": False, "legs": {}}),
+            patch("app.bridge.singbox.running", return_value=False),
+        ):
+            b._start()
+        refresh.assert_called_once()
+        elev.assert_called_once()
 
     def test_ensure_gui_opens_without_socks_probe(self):
         with (
@@ -393,6 +406,7 @@ class UpdateBg(unittest.TestCase):
         got = b.pull()
         self.assertTrue(got.get("newer"))
         self.assertEqual(got.get("kind"), "update")
+        self.assertTrue(got.get("must"))
 
     def test_404_is_silent_not_newer(self):
         b = Bridge()

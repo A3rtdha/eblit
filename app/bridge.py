@@ -249,6 +249,14 @@ class Bridge:
             write(f"sub_set fail: {exc}")
             return {"ok": False, "url": "", "tags": [], "why": str(exc)}
 
+    def sub_pull(self) -> dict:
+        """Синхронно стянуть подписку. Для старта окна — до автоподключения."""
+        try:
+            return subscribe.refresh()
+        except (OSError, ValueError) as exc:
+            write(f"sub pull fail: {exc}")
+            return {**roster.stack_nodes(), "ok": False, "why": str(exc)}
+
     def sub_refresh(self) -> dict:
         if self._sub_busy:
             return {"ok": True, "pending": True, "ignored": True}
@@ -297,11 +305,8 @@ class Bridge:
                 info = updates.check()
                 if info.get("newer") and info.get("asset"):
                     latest = str(info.get("latest") or "")
-                    self._notify_os(
-                        "Eblit",
-                        f"Доступна {latest} — нажмите версию внизу, чтобы поставить",
-                    )
-                    self._push({**info, "kind": "update"})
+                    self._notify_os("Eblit", f"Доступна {latest} — обновите в окне")
+                    self._push({**info, "kind": "update", "must": True})
             except (OSError, ValueError) as exc:
                 write(f"update check fail: {exc}")
             finally:
@@ -368,7 +373,12 @@ class Bridge:
             return {"ok": False, "opened": False, "why": str(exc)}
 
     def _start(self) -> dict:
-        warp.open_gui()
+        try:
+            sub = subscribe.refresh()
+            if not sub.get("ok") and not sub.get("skipped"):
+                write(f"подписка: {sub.get('why') or 'не обновилась'}")
+        except (OSError, ValueError) as exc:
+            write(f"подписка: {exc}")
         if not admin.is_admin():
             launched, code = admin.elevated(["start"])
             if not launched:

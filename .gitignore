@@ -3,6 +3,7 @@ config.json
 README.txt
 lagom-*.json
 eblit-power.json
+eblit-first.json
 _probe*.json
 
 # Runtime

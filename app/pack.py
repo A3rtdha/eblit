@@ -44,7 +44,7 @@ def main() -> int:
     shipped = nodes.sanitize_for_ship(json.loads(cfg.read_text(encoding="utf-8")))
     (dist / "config.json").write_text(json.dumps(shipped, indent=2) + "\n", encoding="utf-8")
     # Прогон приложения из dist оставляет здесь пики/хосты/логи — их слать нельзя.
-    for pattern in ("lagom-*.json", "_probe*.json", "*.log", "eblit-power.json"):
+    for pattern in ("lagom-*.json", "_probe*.json", "*.log", "eblit-power.json", "eblit-first.json"):
         for stray in dist.glob(pattern):
             stray.unlink()
     shipped_vless = [o for o in shipped.get("outbounds", []) if o.get("type") == "vless"]

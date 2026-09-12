@@ -686,21 +686,88 @@ function bindProbe() {
 }
 
 const FIRST_KEY = "eblit-first";
+const FIRST_WAIT_SEC = 30;
+let firstWaitTimer = 0;
 
-function seenFirst() {
+function seenFirstLocal() {
   try {
     return localStorage.getItem(FIRST_KEY) === "1";
   } catch (err) {
-    return true;
+    return false;
   }
 }
 
-function markFirst() {
+function markFirstLocal() {
   try {
     localStorage.setItem(FIRST_KEY, "1");
   } catch (err) {
-    /* private mode — покажем снова */
+    /* private mode */
   }
+}
+
+async function alreadyReadFirst() {
+  const api = window.pywebview && window.pywebview.api;
+  if (api && api.first_seen) {
+    try {
+      const disk = await api.first_seen();
+      if (disk && disk.read) {
+        markFirstLocal();
+        return true;
+      }
+    } catch (err) {
+      /* файл не критичен — ниже localStorage */
+    }
+  }
+  if (!seenFirstLocal()) return false;
+  if (api && api.first_mark) {
+    try {
+      await api.first_mark();
+    } catch (err) {
+      /* диск мог не записаться, ключ в браузере есть */
+    }
+  }
+  return true;
+}
+
+async function markFirst() {
+  markFirstLocal();
+  const api = window.pywebview && window.pywebview.api;
+  if (api && api.first_mark) {
+    try {
+      await api.first_mark();
+    } catch (err) {
+      /* localStorage уже есть */
+    }
+  }
+}
+
+function paintFirstWait(sec) {
+  const btn = document.getElementById("btn-first-go");
+  if (!btn) return;
+  if (sec > 0) {
+    btn.disabled = true;
+    btn.textContent = `Понял, включить · ${sec}`;
+    return;
+  }
+  btn.disabled = false;
+  btn.textContent = "Понял, включить";
+}
+
+function armFirstWait() {
+  window.clearInterval(firstWaitTimer);
+  firstWaitTimer = 0;
+  let left = FIRST_WAIT_SEC;
+  paintFirstWait(left);
+  firstWaitTimer = window.setInterval(() => {
+    left -= 1;
+    if (left <= 0) {
+      window.clearInterval(firstWaitTimer);
+      firstWaitTimer = 0;
+      paintFirstWait(0);
+      return;
+    }
+    paintFirstWait(left);
+  }, 1000);
 }
 
 function firstSay(text) {
@@ -744,7 +811,7 @@ function bindFirst() {
   const btn = document.getElementById("btn-first-go");
   if (!btn) return;
   btn.addEventListener("click", async () => {
-    if (busy) return;
+    if (busy || btn.disabled) return;
     const api = window.pywebview && window.pywebview.api;
     const need = document.getElementById("first-need-sub");
     const input = document.getElementById("first-sub");
@@ -772,7 +839,7 @@ function bindFirst() {
       }
     }
     btn.disabled = true;
-    markFirst();
+    await markFirst();
     go("#/");
     if (powerOn) return;
     setBusy("start");
@@ -1518,9 +1585,10 @@ window.addEventListener("pywebviewready", async () => {
       /* нет сети — старый список, подключение всё равно */
     }
   }
-  if (!seenFirst()) {
+  if (!(await alreadyReadFirst())) {
     await paintFirst();
     go("#/first");
+    armFirstWait();
   } else if (st && st.want_on && !st.power) {
     setBusy("start");
     await call("start");

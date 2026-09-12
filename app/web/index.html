@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>Eblit</title>
-  <link rel="stylesheet" href="styles.css?v=40" />
+  <link rel="stylesheet" href="styles.css?v=41" />
 </head>
 <body>
   <div class="bg"></div>
@@ -61,7 +61,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>
           </span>
         </div>
-        <button type="button" class="ver" id="ver" title="Проверить обновление">1.4.0</button>
+        <button type="button" class="ver" id="ver" title="Проверить обновление">1.4.1</button>
         <div class="float-dock">
           <button type="button" class="ghost" data-action="guide" aria-label="Гайд" title="Гайд">
             <span>i</span>
@@ -256,8 +256,21 @@
             <p>ChatGPT, Spotify и Meta идут через Eblit. Игры и Discord — как без него, скорость не режется.</p>
           </section>
 
+          <section class="block">
+            <h2><span class="first-n">2</span>Кнопки</h2>
+            <dl class="first-ui">
+              <div><dt>Большая</dt><dd>вкл / выкл</dd></div>
+              <div><dt>Квадрат</dt><dd>стоп</dd></div>
+              <div><dt>Круговая</dt><dd>перезапуск</dd></div>
+              <div><dt>Галочка</dt><dd>проверка</dd></div>
+              <div><dt>Три значка</dt><dd>жив ли сервис</dd></div>
+              <div><dt>Шестерёнка</dt><dd>настройки</dd></div>
+              <div><dt>i</dt><dd>гайд</dd></div>
+            </dl>
+          </section>
+
           <section class="block" id="first-need-sub" hidden>
-            <h2><span class="first-n">2</span>Ссылка</h2>
+            <h2><span class="first-n">3</span>Ссылка</h2>
             <p>Без сервера ИИ не откроется. Вставь ссылку подписки — одну строку, начинается с https.</p>
             <label class="field">
               <input type="text" id="first-sub" spellcheck="false" aria-label="Ссылка подписки" placeholder="https://…" value="" />
@@ -265,15 +278,15 @@
           </section>
 
           <section class="block" id="first-have-sub" hidden>
-            <h2><span class="first-n">2</span>Сервер</h2>
+            <h2><span class="first-n">3</span>Сервер</h2>
             <p>Сервер уже есть — этот шаг можно не трогать.</p>
           </section>
 
           <section class="block">
-            <h2><span class="first-n">3</span>Кнопка</h2>
-            <p>Нажми кнопку внизу. Windows спросит права — согласись. Три значка внизу станут бирюзовыми, когда всё живо.</p>
+            <h2><span class="first-n">4</span>Дальше</h2>
+            <p>Кнопка станет активной через полминуты — успеешь прочитать. Windows спросит права, согласись. Три значка внизу станут бирюзовыми, когда всё живо.</p>
             <p class="first-err" id="first-msg" hidden></p>
-            <button type="button" class="first-go" id="btn-first-go">Понял, включить</button>
+            <button type="button" class="first-go" id="btn-first-go" disabled>Понял, включить · 30</button>
           </section>
         </div>
       </section>
@@ -289,6 +302,6 @@
   </div>
 
   <script src="node-parse.js?v=19"></script>
-  <script src="app.js?v=45"></script>
+  <script src="app.js?v=46"></script>
 </body>
 </html>

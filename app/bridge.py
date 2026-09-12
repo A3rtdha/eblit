@@ -9,6 +9,7 @@ from .log import write
 from .stack import (
     admin,
     autostart,
+    first_pref,
     health,
     lan,
     lifecycle,
@@ -30,6 +31,7 @@ WD_DEBOUNCE = 2  # столько фейлов подряд, чтобы не д�
 WD_MAX_ATTEMPTS = 3  # попыток переподключения, потом «включи вручную»
 WD_COOLDOWN = 90.0  # пауза между попытками, сек
 WD_GIVEUP_COOLDOWN = 600.0  # после сдачи — долго не трогаем
+UPD_INTERVAL = 3600.0  # раз в час, пока процесс жив (окно и трей)
 
 
 class Bridge:
@@ -52,10 +54,13 @@ class Bridge:
         self._wd_fail = 0
         self._wd_attempts = 0
         self._wd_cooldown_until = 0.0
+        self._upd_started = False
+        self._update_told = ""
 
     def set_window(self, window) -> None:
         self._window = window
         self._start_watchdog()
+        self._start_update_watch()
 
     def set_notify(self, fn) -> None:
         """Колбэк OS-уведомки (трей). Без него watchdog просто пишет в лог."""
@@ -235,6 +240,20 @@ class Bridge:
     def version(self) -> dict:
         return {"ok": True, "version": VERSION}
 
+    def first_seen(self) -> dict:
+        try:
+            return first_pref.seen()
+        except OSError as exc:
+            write(f"first_seen fail: {exc}")
+            return {"ok": False, "read": False, "why": str(exc)}
+
+    def first_mark(self) -> dict:
+        try:
+            return first_pref.mark()
+        except OSError as exc:
+            write(f"first_mark fail: {exc}")
+            return {"ok": False, "read": False, "why": str(exc)}
+
     def sub_get(self) -> dict:
         try:
             return subscribe.get()
@@ -305,6 +324,9 @@ class Bridge:
                 info = updates.check()
                 if info.get("newer") and info.get("asset"):
                     latest = str(info.get("latest") or "")
+                    if latest and latest == self._update_told:
+                        return
+                    self._update_told = latest
                     self._notify_os("Eblit", f"Доступна {latest} — обновите в окне")
                     self._push({**info, "kind": "update", "must": True})
             except (OSError, ValueError) as exc:
@@ -492,6 +514,20 @@ class Bridge:
             return
         self._wd_started = True
         threading.Thread(target=self._watchdog, name="eblit-watchdog", daemon=True).start()
+
+    def _start_update_watch(self) -> None:
+        if self._upd_started:
+            return
+        self._upd_started = True
+        threading.Thread(target=self._update_watch, name="eblit-upd", daemon=True).start()
+
+    def _update_watch(self) -> None:
+        while True:
+            time.sleep(UPD_INTERVAL)
+            try:
+                self.check_update_bg()
+            except (OSError, ValueError) as exc:
+                write(f"update watch: {exc}")
 
     def _watchdog(self) -> None:
         while True:

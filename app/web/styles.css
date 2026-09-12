@@ -933,6 +933,28 @@ textarea {
   margin-right: 0.55em;
 }
 .first .field { margin: 12px 0 0; }
+.first-ui {
+  margin: 10px 0 0;
+  display: grid;
+  gap: 7px;
+}
+.first-ui div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.first-ui dt {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 13px;
+  font-weight: 550;
+}
+.first-ui dd {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 13px;
+  text-align: right;
+}
 .first-err {
   margin: 12px 0 0;
   font-size: 13px;

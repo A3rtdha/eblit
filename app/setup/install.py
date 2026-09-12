@@ -29,6 +29,7 @@ _SKIP_PAYLOAD = {
     "lagom-probe.json",
     "lagom-sub.json",
     "eblit-power.json",
+    "eblit-first.json",
 }
 
 STEPS = (

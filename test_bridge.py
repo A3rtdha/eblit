@@ -423,6 +423,38 @@ class UpdateBg(unittest.TestCase):
         self.assertNotEqual(got.get("kind"), "update")
         self.assertFalse(got.get("newer"))
 
+    def test_same_latest_notifies_once(self):
+        b = Bridge()
+        notes = []
+        b._notify_os = lambda _t, msg: notes.append(msg)
+        payload = {
+            "ok": True,
+            "newer": True,
+            "latest": "1.0.1",
+            "asset": "https://example/EblitSetup.exe",
+        }
+        with patch("app.bridge.updates.check", return_value=payload):
+            b.check_update_bg()
+            self._wait_push(b)
+            b.pull()
+            b.check_update_bg()
+            self._wait_push(b)
+        self.assertEqual(len(notes), 1)
+        got = b.pull()
+        self.assertNotEqual(got.get("kind"), "update")
+
+    def test_update_watch_sleeps_an_hour_before_check(self):
+        b = Bridge()
+        with (
+            patch("app.bridge.time.sleep") as sleep,
+            patch.object(b, "check_update_bg") as check,
+        ):
+            sleep.side_effect = KeyboardInterrupt()
+            with self.assertRaises(KeyboardInterrupt):
+                b._update_watch()
+        sleep.assert_called_with(3600.0)
+        check.assert_not_called()
+
 
 class PingNodes(unittest.TestCase):
     def _wait(self, b: Bridge, timeout: float = 2.0):

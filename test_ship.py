@@ -122,8 +122,10 @@ class ShipSkip(unittest.TestCase):
 
         self.assertIn("lagom-sub.json", install._SKIP_PAYLOAD)
         self.assertIn("eblit-power.json", install._SKIP_PAYLOAD)
+        self.assertIn("eblit-first.json", install._SKIP_PAYLOAD)
         src = Path(pack_main.__code__.co_filename).read_text(encoding="utf-8")
         self.assertIn("eblit-power.json", src)
+        self.assertIn("eblit-first.json", src)
 
 
 class BadLeg(unittest.TestCase):

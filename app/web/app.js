@@ -102,7 +102,9 @@ function armPull() {
   if (pullTimer) return;
   const api = () => window.pywebview && window.pywebview.api;
   let idle = 0;
+  let inFlight = false;
   pullTimer = window.setInterval(async () => {
+    if (inFlight) return;
     const bridge = api();
     if (!bridge || !bridge.pull) {
       idle += 1;
@@ -112,7 +114,20 @@ function armPull() {
       }
       return;
     }
-    const data = await bridge.pull();
+    inFlight = true;
+    let data = null;
+    try {
+      data = await bridge.pull();
+    } catch (err) {
+      idle += 1;
+      if (idle > 50) {
+        window.clearInterval(pullTimer);
+        pullTimer = 0;
+      }
+      inFlight = false;
+      return;
+    }
+    inFlight = false;
     if (!data || data.pending) {
       idle = data && data.wait ? 0 : idle + 1;
       // Подключение не отвечает — не оставляем кнопку вечно в «Включаю…».
@@ -873,8 +888,23 @@ function bindServers() {
   let selWanted = "auto";
   let pingByTag = {};
   let pinging = false;
+  let pingWatch = 0;
   let subbing = false;
   let savedSub = "";
+
+  function clearPingWatch() {
+    if (pingWatch) {
+      window.clearTimeout(pingWatch);
+      pingWatch = 0;
+    }
+  }
+
+  function stopPingSpin(msg) {
+    pinging = false;
+    clearPingWatch();
+    if (btnPing) btnPing.classList.remove("spin");
+    if (msg) say(msg, false);
+  }
 
   function say(text, ok) {
     if (!msg) return;
@@ -957,11 +987,7 @@ function bindServers() {
       nodes.forEach((n) => {
         if (n && n.tag) pingByTag[n.tag] = n;
       });
-      pinging = false;
-      if (btnPing) btnPing.classList.remove("spin");
-      if (payload && !Array.isArray(payload) && payload.ok === false && payload.why) {
-        say(payload.why, false);
-      }
+      stopPingSpin(payload && !Array.isArray(payload) && payload.ok === false ? payload.why : "");
     }
     list.querySelectorAll("li").forEach((li) => {
       paintDot(li.querySelector(".geo-dot"), pingByTag[li.dataset.tag]);
@@ -1181,7 +1207,7 @@ function bindServers() {
       await refresh();
       if (wasCurrent) say("удалён текущий — сменится после перезапуска", true);
     } catch (err) {
-      say("не удалось удалить", false);
+      say((err && err.message) || "не удалось удалить", false);
     }
   });
 
@@ -1245,19 +1271,20 @@ function bindServers() {
       if (!api || !api.ping_nodes) return;
       pinging = true;
       btnPing.classList.add("spin");
+      clearPingWatch();
+      pingWatch = window.setTimeout(() => {
+        stopPingSpin("проверка серверов зависла");
+      }, 50000);
       try {
         const res = await api.ping_nodes();
         if (res && res.ignored) {
-          pinging = false;
-          btnPing.classList.remove("spin");
+          stopPingSpin();
           return;
         }
         if (res && res.kind === "ping") applyLamps(res);
         if (res && res.pending) armPull();
       } catch (err) {
-        pinging = false;
-        btnPing.classList.remove("spin");
-        say("не удалось проверить серверы", false);
+        stopPingSpin("не удалось проверить серверы");
       }
     });
   }

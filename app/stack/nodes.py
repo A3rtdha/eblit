@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import time
 from pathlib import Path
 
 import app.paths as paths
@@ -50,7 +51,23 @@ def cfg_path() -> Path:
 def _atomic_write(path: Path, text: str) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
+    last: OSError | None = None
+    for _ in range(6):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError as exc:
+            last = exc
+            time.sleep(0.08)
+    # ponytail: Windows не даёт replace, пока sing-box держит config.json.
+    # Пишем поверх того же файла; reload всё равно перечитает диск.
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError:
+        if last is not None:
+            raise last
+        raise
+    tmp.unlink(missing_ok=True)
 
 
 def read_config() -> dict:

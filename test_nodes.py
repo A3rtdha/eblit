@@ -68,6 +68,23 @@ class NodesIO(unittest.TestCase):
         self.assertEqual(hosts["Mars"], "redplanet.example")
         self.assertEqual(len([n for n in result["nodes"] if n["tag"] == "Mars"]), 1)
 
+    def test_atomic_write_retries_locked_replace(self):
+        target = self.dir / "locked.json"
+        target.write_text("old", encoding="utf-8")
+        real_replace = type(target).replace
+        hits = {"n": 0}
+
+        def flaky(self_path, dest):
+            hits["n"] += 1
+            if hits["n"] < 3:
+                raise PermissionError("занят")
+            return real_replace(self_path, dest)
+
+        with patch.object(type(target), "replace", flaky):
+            nodes._atomic_write(target, "new\n")
+        self.assertEqual(target.read_text(encoding="utf-8"), "new\n")
+        self.assertGreaterEqual(hits["n"], 3)
+
     def test_remove_current_repoints_selector(self):
         """Пустой selector sing-box не запускает: остаться должен живой тег."""
         nodes.add(NODE_PARSED)

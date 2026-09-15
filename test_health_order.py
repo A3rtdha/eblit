@@ -4,9 +4,11 @@ from __future__ import annotations
 import inspect
 import json
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from app.stack import health as m
 from app.stack import nodes
@@ -77,6 +79,16 @@ class ResolveWithoutGoogle(unittest.TestCase):
         ) as gai:
             self.assertEqual(m.resolve_one("node.example"), "203.0.113.10")
         gai.assert_called_once()
+
+    def test_resolve_one_timeout_returns_none(self):
+        def hang(*_a, **_k):
+            time.sleep(2)
+            return [(2, 1, 6, "", ("203.0.113.10", 0))]
+
+        with patch.object(m.socket, "getaddrinfo", side_effect=hang):
+            t0 = time.perf_counter()
+            self.assertIsNone(m.resolve_one("slow.example", timeout=0.15))
+            self.assertLess(time.perf_counter() - t0, 0.8)
 
     def test_no_http_resolver_left(self):
         src = Path(m.__file__).read_text(encoding="utf-8")
@@ -153,6 +165,44 @@ class ScanAll(unittest.TestCase):
             m.scan_all()
         self.assertTrue(seen)
         self.assertTrue(all(p >= 2100 for p in seen))
+
+    def test_hung_probe_still_returns(self):
+        gate = threading.Event()
+
+        def hung(*_a, **_k):
+            gate.wait(timeout=5)
+            return True, 1, "200"
+
+        with patch.object(m, "probe", side_effect=hung), patch.object(m, "SCAN_BUDGET", 0.2):
+            t0 = time.perf_counter()
+            result = m.scan_all()
+            elapsed = time.perf_counter() - t0
+        gate.set()
+        self.assertLess(elapsed, 2)
+        self.assertTrue(result["ok"])
+        self.assertTrue(any(n.get("why") == "timeout" for n in result["nodes"]))
+
+
+class ProbeCurlTimeout(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="eblit-probe-to-")
+        self.dir = Path(self.tmp.name)
+        self.root_patch = patch("app.paths.root", return_value=self.dir)
+        self.root_patch.start()
+        self.addCleanup(self.root_patch.stop)
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_hung_curl_is_timeout_not_hang(self):
+        proc = Mock()
+        with (
+            patch.object(m.subprocess, "Popen", return_value=proc),
+            patch.object(m.time, "sleep"),
+            patch.object(m.subprocess, "run", side_effect=m.subprocess.TimeoutExpired("curl", 8)),
+        ):
+            live, _ms, why = m.probe("Sweden", {"tag": "Sweden", "type": "vless"}, "1.2.3.4")
+        self.assertFalse(live)
+        self.assertEqual(why, "timeout")
+        proc.terminate.assert_called()
 
 
 class MainCleanup(unittest.TestCase):

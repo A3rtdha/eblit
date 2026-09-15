@@ -495,5 +495,27 @@ class PingNodes(unittest.TestCase):
         self.assertIn("boom", got.get("why", ""))
 
 
+class RemoveNodeFail(unittest.TestCase):
+    def test_error_keeps_ok_false(self):
+        b = Bridge()
+        roster_ok = {
+            "ok": True,
+            "nodes": [{"tag": "Sweden"}],
+            "selected": "Sweden",
+            "pick": None,
+            "favorite": None,
+            "manual": False,
+            "auto": True,
+            "why": "",
+        }
+        with (
+            patch("app.bridge.nodes.remove", side_effect=PermissionError("занят")),
+            patch("app.bridge.roster.stack_nodes", return_value=roster_ok),
+        ):
+            got = b.remove_node("Sweden")
+        self.assertFalse(got["ok"])
+        self.assertIn("занят", got["why"])
+
+
 if __name__ == "__main__":
     unittest.main()

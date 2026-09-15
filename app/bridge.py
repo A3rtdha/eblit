@@ -146,14 +146,14 @@ class Bridge:
             return {**nodes.add(parsed), "ok": True}
         except (OSError, ValueError) as exc:
             write(f"add_node fail: {exc}")
-            return {"ok": False, "why": str(exc), **roster.stack_nodes()}
+            return {**roster.stack_nodes(), "ok": False, "why": str(exc)}
 
     def remove_node(self, tag: str) -> dict:
         try:
             return {**nodes.remove(tag), "ok": True}
         except (OSError, ValueError) as exc:
             write(f"remove_node fail: {exc}")
-            return {"ok": False, "why": str(exc), **roster.stack_nodes()}
+            return {**roster.stack_nodes(), "ok": False, "why": str(exc)}
 
     def select_node(self, tag: str) -> dict:
         try:
@@ -176,7 +176,7 @@ class Bridge:
             return {**roster.stack_nodes(), "ok": True}
         except (OSError, ValueError) as exc:
             write(f"set_favorite fail: {exc}")
-            return {"ok": False, "why": str(exc), **roster.stack_nodes()}
+            return {**roster.stack_nodes(), "ok": False, "why": str(exc)}
 
     def links(self) -> dict:
         try:

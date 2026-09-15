@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import socket
 import subprocess
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from concurrent.futures import as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -47,6 +49,9 @@ PROBE_URL = "https://grok.com/"
 PROBE_PORT = 2099
 SCAN_PORT = 2100
 SCAN_WORKERS = 4
+CURL_TIMEOUT = 8
+RESOLVE_TIMEOUT = 2.0
+SCAN_BUDGET = 40.0
 
 
 def log(line: str) -> None:
@@ -57,16 +62,30 @@ def log(line: str) -> None:
     echo(text)
 
 
-def resolve_one(host: str) -> str | None:
+def resolve_one(host: str, timeout: float = RESOLVE_TIMEOUT) -> str | None:
     """Системный резолвер. Раньше был DoH к `dns.google` — серия таких запросов
     с домашнего IP при каждом старте выглядела для Google автоматикой и приводила
     к reCAPTCHA в браузере. Не возвращать сюда HTTP-резолверы."""
-    ips: list[str] = []
-    for info in socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM):
-        ip = info[4][0]
-        if ip not in ips:
-            ips.append(ip)
-    return ips[0] if ips else None
+    box: list[str | None] = []
+
+    def lookup() -> None:
+        ips: list[str] = []
+        try:
+            for info in socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM):
+                ip = info[4][0]
+                if ip not in ips:
+                    ips.append(ip)
+            box.append(ips[0] if ips else None)
+        except OSError:
+            box.append(None)
+
+    # ponytail: getaddrinfo не умеет timeout; поток-демон доживёт DNS сам.
+    worker = threading.Thread(target=lookup, name="eblit-dns", daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive() or not box:
+        return None
+    return box[0]
 
 
 def probe(
@@ -97,23 +116,28 @@ def probe(
     try:
         time.sleep(0.6)
         t0 = time.perf_counter()
-        r = subprocess.run(
-            [
-                "curl.exe",
-                "-4",
-                "--socks5-hostname",
-                f"127.0.0.1:{port}",
-                "-sI",
-                "--connect-timeout",
-                "5",
-                "--max-time",
-                "6",
-                PROBE_URL,
-            ],
-            capture_output=True,
-            text=True,
-            creationflags=CREATE_NO_WINDOW,
-        )
+        try:
+            r = subprocess.run(
+                [
+                    "curl.exe",
+                    "-4",
+                    "--socks5-hostname",
+                    f"127.0.0.1:{port}",
+                    "-sI",
+                    "--connect-timeout",
+                    "5",
+                    "--max-time",
+                    "6",
+                    PROBE_URL,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=CURL_TIMEOUT,
+                creationflags=CREATE_NO_WINDOW,
+            )
+        except subprocess.TimeoutExpired:
+            ms = int((time.perf_counter() - t0) * 1000)
+            return False, ms, "timeout"
         ms = int((time.perf_counter() - t0) * 1000)
         if live_exit(r.stdout):
             return True, ms, status_code(r.stdout)
@@ -125,6 +149,10 @@ def probe(
             proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
             proc.kill()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
         path.unlink(missing_ok=True)
 
 
@@ -217,17 +245,13 @@ def scan_all() -> dict:
         if isinstance(ob, dict) and ob.get("type") == "vless" and ob.get("tag")
     }
     host_map = nodes.hosts()
-    pins: dict[str, str] = {}
-    jobs: list[tuple[str, str, int]] = []
+    jobs = [(tag, SCAN_PORT + i) for i, tag in enumerate(by_tag)]
     rows: list[dict] = []
-    for i, tag in enumerate(by_tag):
-        ip = _ip_for_tag(tag, by_tag[tag], host_map, pins)
-        if not ip:
-            rows.append({"tag": tag, "live": False, "ms": 0, "why": "нет IP"})
-            continue
-        jobs.append((tag, ip, SCAN_PORT + i))
 
-    def one(tag: str, ip: str, port: int) -> dict:
+    def one(tag: str, port: int) -> dict:
+        ip = _ip_for_tag(tag, by_tag[tag], host_map, {})
+        if not ip:
+            return {"tag": tag, "live": False, "ms": 0, "why": "нет IP"}
         path = _dir() / f"_probe_{port}.json"
         try:
             live, ms, why = probe(tag, by_tag[tag], ip, port=port, probe_path=path)
@@ -237,10 +261,18 @@ def scan_all() -> dict:
 
     if jobs:
         workers = min(SCAN_WORKERS, len(jobs))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futs = [pool.submit(one, tag, ip, port) for tag, ip, port in jobs]
-            for fut in as_completed(futs):
+        pool = ThreadPoolExecutor(max_workers=workers)
+        futs = {pool.submit(one, tag, port): tag for tag, port in jobs}
+        pending = dict(futs)
+        try:
+            for fut in as_completed(futs, timeout=SCAN_BUDGET):
                 rows.append(fut.result())
+                pending.pop(fut, None)
+        except FuturesTimeout:
+            for fut, tag in pending.items():
+                rows.append({"tag": tag, "live": False, "ms": 0, "why": "timeout"})
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     order = {tag: i for i, tag in enumerate(by_tag)}
     rows.sort(key=lambda n: order.get(n["tag"], 999))

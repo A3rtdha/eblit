@@ -11,7 +11,7 @@ PROBE_FILE = "lagom-probe.json"
 
 
 def _path():
-    return paths.root() / PROBE_FILE
+    return paths.data_root() / PROBE_FILE
 
 
 def _coerce(raw) -> int | None:

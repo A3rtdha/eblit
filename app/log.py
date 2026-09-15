@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import sys
 from datetime import datetime
+from pathlib import Path
 
-from .paths import root
+from .paths import data_root
 
-LOG = root() / "split-ui.log"
+LOG = None  # tests may assign a Path; runtime uses data_root()
 
 
 def echo(text: str) -> None:
@@ -29,6 +30,10 @@ def echo(text: str) -> None:
 def write(line: str) -> None:
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     text = f"{stamp} {line}"
-    with LOG.open("a", encoding="utf-8") as f:
-        f.write(f"{text}\n")
+    path = LOG if isinstance(LOG, Path) else data_root() / "split-ui.log"
+    try:
+        with path.open("a", encoding="utf-8") as f:
+            f.write(f"{text}\n")
+    except OSError:
+        pass  # лог не должен ронять except в bridge/watchdog
     echo(text)

@@ -10,7 +10,7 @@ POWER_FILE = "eblit-power.json"
 
 
 def _path():
-    return paths.root() / POWER_FILE
+    return paths.data_root() / POWER_FILE
 
 
 def get() -> dict:

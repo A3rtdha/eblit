@@ -42,7 +42,7 @@ _IP_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 
 
 def _path():
-    return paths.root() / SUB_FILE
+    return paths.data_root() / SUB_FILE
 
 
 def _write_pref(url: str, tags: list[str]) -> None:
@@ -492,7 +492,7 @@ def _identity_ob(ob: dict, hosts_map: dict[str, str]) -> tuple[str, str, int]:
 
 
 def _drop_sidecar_if_gone(filename: str, alive: set[str]) -> None:
-    path = paths.root() / filename
+    path = paths.data_root() / filename
     if not path.is_file():
         return
     try:
@@ -507,7 +507,7 @@ def _remap_sidecar_tags(renames: dict[str, str]) -> None:
     if not renames:
         return
     for filename in (nodes.PICK_FILE, nodes.FAV_FILE):
-        path = paths.root() / filename
+        path = paths.data_root() / filename
         if not path.is_file():
             continue
         try:

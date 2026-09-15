@@ -42,6 +42,14 @@ class CharmapConsole(unittest.TestCase):
         with patch("sys.stdout", None):
             logmod.echo("de Германия ⚡")
 
+    def test_write_readonly_log_does_not_raise(self):
+        path = self.dir / "split-ui.log"
+        path.write_text("", encoding="utf-8")
+        path.chmod(0o444)
+        self.addCleanup(lambda: path.chmod(0o666))
+        with patch.object(logmod, "LOG", path), patch("sys.stdout", charmap_stdout()):
+            logmod.write("set_favorite fail: test")
+
 
 if __name__ == "__main__":
     unittest.main()

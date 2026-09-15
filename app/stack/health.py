@@ -23,7 +23,7 @@ DIR = None  # tests may patch paths.root
 
 
 def _dir() -> Path:
-    return paths.root()
+    return paths.data_root()
 
 
 def _cfg() -> Path:
@@ -57,8 +57,11 @@ SCAN_BUDGET = 40.0
 def log(line: str) -> None:
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     text = f"{stamp} {line}"
-    with _log().open("a", encoding="utf-8") as f:
-        f.write(text + "\n")
+    try:
+        with _log().open("a", encoding="utf-8") as f:
+            f.write(text + "\n")
+    except OSError:
+        pass
     echo(text)
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from app.paths import root, singbox
+from app.paths import data_root, root, singbox
 from app.stack.httpchk import has_http
 from app.stack.run import hidden, kill_image, spawn
 
@@ -35,7 +35,7 @@ def adapter() -> bool:
 
 
 def check() -> tuple[bool, str]:
-    cfg = root() / "config.json"
+    cfg = data_root() / "config.json"
     r = hidden([str(singbox()), "check", "-c", str(cfg)], timeout=20)
     if r.returncode == 0:
         return True, ""
@@ -44,8 +44,8 @@ def check() -> tuple[bool, str]:
 
 
 def start() -> None:
-    cfg = root() / "config.json"
-    log = (root() / "sing-box.log").open("a", encoding="utf-8")
+    cfg = data_root() / "config.json"
+    log = (data_root() / "sing-box.log").open("a", encoding="utf-8")
     spawn([str(singbox()), "run", "-c", str(cfg)], cwd=str(root()), log=log)
 
 

@@ -12,7 +12,7 @@ _SUB_FILE = "lagom-sub.json"
 
 
 def _path():
-    return paths.root() / FIRST_FILE
+    return paths.data_root() / FIRST_FILE
 
 
 def _write(read: bool) -> dict:
@@ -26,11 +26,11 @@ def _write(read: bool) -> dict:
 
 def _legacy_user() -> bool:
     """Уже ставили и пользовались: апдейт не должен снова показывать экран."""
-    root = paths.root()
-    if (root / _POWER_FILE).is_file():
-        return True
-    if (root / _SUB_FILE).is_file():
-        return True
+    for base in (paths.data_root(), paths.root()):
+        if (base / _POWER_FILE).is_file():
+            return True
+        if (base / _SUB_FILE).is_file():
+            return True
     return False
 
 

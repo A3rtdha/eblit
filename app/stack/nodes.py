@@ -45,7 +45,7 @@ _IP_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 
 
 def cfg_path() -> Path:
-    return paths.root() / "config.json"
+    return paths.data_root() / "config.json"
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -79,7 +79,7 @@ def write_config(cfg: dict) -> None:
 
 
 def _hosts_path() -> Path:
-    return paths.root() / HOSTS_FILE
+    return paths.data_root() / HOSTS_FILE
 
 
 def _sni(ob: dict) -> str:
@@ -427,7 +427,7 @@ def remove(tag: str) -> dict:
     mapping = hosts()
     mapping.pop(tag, None)
     _set_hosts(mapping)
-    pick_path = paths.root() / PICK_FILE
+    pick_path = paths.data_root() / PICK_FILE
     if pick_path.is_file():
         try:
             pick = json.loads(pick_path.read_text(encoding="utf-8"))
@@ -435,7 +435,7 @@ def remove(tag: str) -> dict:
                 pick_path.unlink(missing_ok=True)
         except (OSError, json.JSONDecodeError, TypeError):
             pass
-    fav_path = paths.root() / FAV_FILE
+    fav_path = paths.data_root() / FAV_FILE
     if fav_path.is_file():
         try:
             fav = json.loads(fav_path.read_text(encoding="utf-8"))
@@ -448,7 +448,7 @@ def remove(tag: str) -> dict:
 
 
 def select(tag: str | None) -> None:
-    pick_path = paths.root() / PICK_FILE
+    pick_path = paths.data_root() / PICK_FILE
     if not tag or tag == "auto":
         if pick_path.is_file():
             try:
@@ -478,7 +478,7 @@ def select(tag: str | None) -> None:
 
 
 def set_favorite(tag: str | None) -> None:
-    path = paths.root() / FAV_FILE
+    path = paths.data_root() / FAV_FILE
     if not tag:
         path.unlink(missing_ok=True)
         return
@@ -493,7 +493,7 @@ def set_favorite(tag: str | None) -> None:
 
 
 def manual_tag() -> str | None:
-    path = paths.root() / PICK_FILE
+    path = paths.data_root() / PICK_FILE
     if not path.is_file():
         return None
     try:

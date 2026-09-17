@@ -252,6 +252,26 @@ def _repair_empty_selector() -> bool:
     return True
 
 
+def _seed_ai_suffixes(path: Path) -> None:
+    """Апдейт бережёт user config — Gemini/AI Studio в старый список иначе не попадут."""
+    if not path.is_file():
+        return
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return
+    if not isinstance(cfg, dict):
+        return
+    before = nodes.lagom_suffixes(cfg)
+    nodes.apply_lagom_suffixes(cfg, before)
+    if nodes.lagom_suffixes(cfg) == before:
+        return
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    _log(f"дописал Gemini/AI Studio в {path}")
+
+
 def _ensure_config_accepted(*, downloaded: bool) -> None:
     """Свежий sing-box может не принять наш config. Тогда лучше тот, с которым собрано."""
     if _check_singbox():
@@ -342,6 +362,11 @@ def run() -> int:
         _log(f"копирую Eblit → {DEST}")
         _copy_payload()
         shutil.copy2(sb, DEST / "sing-box.exe")
+        _log("ядро extended записано поверх старого sing-box.exe")
+        _seed_ai_suffixes(DEST / "config.json")
+        appdata = Path(os.environ.get("LOCALAPPDATA", "")) / "Eblit" / "config.json"
+        if appdata.is_file() and appdata.resolve() != (DEST / "config.json").resolve():
+            _seed_ai_suffixes(appdata)
         if not (DEST / "config.json").is_file():
             raise OSError("после копирования нет config.json")
         _begin("check")

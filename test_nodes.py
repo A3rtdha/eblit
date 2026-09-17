@@ -68,6 +68,39 @@ class NodesIO(unittest.TestCase):
         self.assertEqual(hosts["Mars"], "redplanet.example")
         self.assertEqual(len([n for n in result["nodes"] if n["tag"] == "Mars"]), 1)
 
+    def test_xhttp_outbound_is_tls_not_reality(self):
+        parsed = {
+            "tag": "Netherlands",
+            "name": "Netherlands",
+            "host": "89.110.108.96",
+            "port": 443,
+            "uuid": "11111111-2222-3333-4444-555555555555",
+            "sni": "ned-06.hello-there.ru",
+            "fingerprint": "firefox",
+            "public_key": "",
+            "flow": "",
+            "net": "xhttp",
+            "path": "/xh",
+            "transport_host": "ned-06.hello-there.ru",
+            "mode": "auto",
+            "alpn": ["h2", "http/1.1"],
+        }
+        ob = nodes.parsed_to_outbound(parsed)
+        self.assertNotIn("reality", ob["tls"])
+        self.assertEqual(ob["tls"]["server_name"], "ned-06.hello-there.ru")
+        self.assertEqual(ob["tls"]["alpn"], ["h2", "http/1.1"])
+        self.assertEqual(ob["transport"]["type"], "xhttp")
+        self.assertEqual(ob["transport"]["path"], "/xh")
+        self.assertEqual(ob["transport"]["host"], "ned-06.hello-there.ru")
+        self.assertEqual(ob["transport"]["mode"], "auto")
+        self.assertEqual(ob["transport"]["x_padding_bytes"], {"from": 100, "to": 1000})
+        nodes.add(parsed)
+        cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
+        got = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "Netherlands")
+        self.assertEqual(got["transport"]["type"], "xhttp")
+        sweden = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "Sweden")
+        self.assertTrue(sweden["tls"]["reality"]["enabled"])
+
     def test_atomic_write_retries_locked_replace(self):
         target = self.dir / "locked.json"
         target.write_text("old", encoding="utf-8")
@@ -122,9 +155,13 @@ class NodesIO(unittest.TestCase):
     def test_set_links_updates_route_and_dns(self):
         nodes.set_links(["grok.com", "x.ai"])
         cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
-        self.assertEqual(nodes.lagom_suffixes(cfg), ["grok.com", "x.ai"])
+        suffixes = nodes.lagom_suffixes(cfg)
+        self.assertEqual(suffixes[:2], ["grok.com", "x.ai"])
+        self.assertIn("aistudio.google.com", suffixes)
+        self.assertIn("alkalimakersuite-pa.clients6.google.com", suffixes)
+        self.assertNotIn("google.com", suffixes)
         dns_rule = next(r for r in cfg["dns"]["rules"] if r.get("server") == "fakeip")
-        self.assertEqual(dns_rule["domain_suffix"], ["grok.com", "x.ai"])
+        self.assertEqual(dns_rule["domain_suffix"], suffixes)
 
     def test_duplicate_add_raises(self):
         nodes.add(NODE_PARSED)

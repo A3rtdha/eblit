@@ -52,6 +52,13 @@ class ConfigShape(unittest.TestCase):
         self.assertEqual(route_suffixes, dns_rule["domain_suffix"])
         self.assertIn("grok.com", route_suffixes)
         self.assertIn("cursor.com", route_suffixes)
+        self.assertIn("gemini.google.com", route_suffixes)
+        self.assertIn("aistudio.google.com", route_suffixes)
+        self.assertIn("generativelanguage.googleapis.com", route_suffixes)
+        self.assertIn("alkalimakersuite-pa.clients6.google.com", route_suffixes)
+        self.assertNotIn("google.com", route_suffixes)
+        self.assertNotIn("googleapis.com", route_suffixes)
+        self.assertNotIn("clients6.google.com", route_suffixes)
 
 
 class ExampleIsSafe(unittest.TestCase):

@@ -86,8 +86,48 @@ def set_url(url) -> dict:
     return {"ok": True, "url": raw, "tags": tags}
 
 
+_NET_ALIAS = {
+    "raw": "tcp",
+    "splithttp": "xhttp",
+    "websocket": "ws",
+    "h2": "http",
+}
+_NET_OK = frozenset({"tcp", "xhttp", "ws", "grpc", "httpupgrade", "http"})
+
+
 def _clean_host(host) -> str:
     return str(host or "").strip().strip("[]")
+
+
+def _norm_net(net) -> str:
+    n = str(net or "tcp").lower()
+    return _NET_ALIAS.get(n, n)
+
+
+def _first_host(val) -> str:
+    if isinstance(val, list):
+        val = val[0] if val else ""
+    return _clean_host(val)
+
+
+def _alpn_list(raw) -> list[str]:
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    text = unquote(str(raw or "")).replace(";", ",")
+    return [p.strip() for p in text.split(",") if p.strip()]
+
+
+def _transport_bits(obj) -> tuple[str, str, str, str]:
+    if not isinstance(obj, dict):
+        return "", "", "", ""
+    path = str(obj.get("path") or "")
+    host = _first_host(obj.get("host"))
+    if not host:
+        headers = obj.get("headers") if isinstance(obj.get("headers"), dict) else {}
+        host = str(headers.get("Host") or headers.get("host") or "")
+    mode = str(obj.get("mode") or "")
+    svc = str(obj.get("service_name") or obj.get("serviceName") or "")
+    return path, host, mode, svc
 
 
 def _node_from_parts(
@@ -102,6 +142,12 @@ def _node_from_parts(
     net="tcp",
     tag="",
     short_id="",
+    security="",
+    path="",
+    transport_host="",
+    mode="",
+    alpn="",
+    service_name="",
 ) -> dict | None:
     uuid = str(uuid or "").strip()
     host = _clean_host(host)
@@ -111,20 +157,30 @@ def _node_from_parts(
         return None
     sni = str(sni or "").strip()
     public_key = str(public_key or "").strip()
-    net = str(net or "tcp").lower()
+    net = _norm_net(net)
+    security = str(security or "").lower()
+    flow = str(flow or "").strip()
     if not UUID_RE.fullmatch(uuid):
         return None
     if not host or re.search(r"\s", host) or len(host) > 253:
         return None
     if port < 1 or port > 65535:
         return None
-    if not sni or not public_key:
+    if not sni:
         return None
-    if net and net != "tcp":
+    if net not in _NET_OK:
+        return None
+    if flow and net != "tcp":
+        return None
+    if public_key and (not security or security == "reality"):
+        pass
+    elif security == "tls":
+        public_key = ""
+    else:
         return None
     name = str(tag or host).strip() or host
     fp = str(fingerprint or "firefox").strip() or "firefox"
-    return {
+    node = {
         "tag": name,
         "name": name,
         "host": host,
@@ -134,9 +190,26 @@ def _node_from_parts(
         "sni": sni,
         "fingerprint": fp,
         "public_key": public_key,
-        "flow": str(flow or "").strip(),
+        "flow": flow,
         "short_id": str(short_id or "").strip(),
+        "net": net,
     }
+    path = unquote(str(path or "")).strip()
+    if path:
+        node["path"] = path
+    thost = _first_host(transport_host)
+    if thost:
+        node["transport_host"] = thost
+    mode = str(mode or "").strip()
+    if mode:
+        node["mode"] = mode
+    alpns = _alpn_list(alpn)
+    if alpns:
+        node["alpn"] = alpns
+    svc = str(service_name or "").strip()
+    if svc:
+        node["service_name"] = svc
+    return node
 
 
 def _parse_vless_uri(uri: str) -> dict | None:
@@ -152,10 +225,6 @@ def _parse_vless_uri(uri: str) -> dict | None:
     q = {k: (v[-1] if v else "") for k, v in parse_qs(parsed.query, keep_blank_values=True).items()}
     security = (q.get("security") or "").lower()
     pbk = q.get("pbk") or q.get("publicKey") or ""
-    if security and security != "reality":
-        return None
-    if not security and not pbk:
-        return None
     port = parsed.port or 443
     name = unquote(parsed.fragment) if parsed.fragment else ""
     user = unquote(parsed.username or "")
@@ -170,6 +239,12 @@ def _parse_vless_uri(uri: str) -> dict | None:
         net=q.get("type") or q.get("net") or "tcp",
         tag=name,
         short_id=q.get("sid") or q.get("shortId") or "",
+        security=security,
+        path=q.get("path") or "",
+        transport_host=q.get("host") or "",
+        mode=q.get("mode") or "",
+        alpn=q.get("alpn") or "",
+        service_name=q.get("serviceName") or q.get("service_name") or "",
     )
 
 
@@ -179,17 +254,26 @@ def _from_singbox(ob: dict) -> dict | None:
     tls = ob.get("tls") if isinstance(ob.get("tls"), dict) else {}
     reality = tls.get("reality") if isinstance(tls.get("reality"), dict) else {}
     utls = tls.get("utls") if isinstance(tls.get("utls"), dict) else {}
+    tr = ob.get("transport") if isinstance(ob.get("transport"), dict) else {}
+    path, thost, mode, svc = _transport_bits(tr)
+    pbk = reality.get("public_key") or reality.get("publicKey") or ""
     return _node_from_parts(
         uuid=ob.get("uuid"),
         host=ob.get("server"),
         port=ob.get("server_port") or ob.get("serverPort") or 443,
         sni=tls.get("server_name") or tls.get("serverName") or "",
-        public_key=reality.get("public_key") or reality.get("publicKey") or "",
+        public_key=pbk,
         fingerprint=utls.get("fingerprint") or "firefox",
         flow=ob.get("flow") or "",
-        net="tcp",
+        net=tr.get("type") or "tcp",
         tag=ob.get("tag") or "",
         short_id=reality.get("short_id") or reality.get("shortId") or "",
+        security="reality" if pbk else "tls",
+        path=path,
+        transport_host=thost,
+        mode=mode,
+        alpn=tls.get("alpn") or "",
+        service_name=svc,
     )
 
 
@@ -199,12 +283,37 @@ def _from_clash(proxy: dict) -> dict | None:
     ro = proxy.get("reality-opts") or proxy.get("reality_opts") or proxy.get("realityOpts") or {}
     if not isinstance(ro, dict):
         ro = {}
+    opts = {}
+    for key in (
+        "xhttp-opts",
+        "xhttp_opts",
+        "ws-opts",
+        "ws_opts",
+        "grpc-opts",
+        "grpc_opts",
+        "http-opts",
+        "http_opts",
+        "httpupgrade-opts",
+    ):
+        val = proxy.get(key)
+        if isinstance(val, dict):
+            opts = val
+            break
+    path, thost, mode, svc = _transport_bits(opts)
+    pbk = ro.get("public-key") or ro.get("public_key") or ro.get("publicKey") or ""
+    tls_on = proxy.get("tls")
+    if pbk:
+        security = "reality"
+    elif tls_on in (False, "false"):
+        security = ""
+    else:
+        security = "tls"
     return _node_from_parts(
         uuid=proxy.get("uuid"),
         host=proxy.get("server"),
         port=proxy.get("port") or 443,
         sni=proxy.get("servername") or proxy.get("server_name") or proxy.get("sni") or "",
-        public_key=ro.get("public-key") or ro.get("public_key") or ro.get("publicKey") or "",
+        public_key=pbk,
         fingerprint=proxy.get("client-fingerprint")
         or proxy.get("client_fingerprint")
         or proxy.get("fp")
@@ -213,6 +322,12 @@ def _from_clash(proxy: dict) -> dict | None:
         net=proxy.get("network") or proxy.get("net") or "tcp",
         tag=proxy.get("name") or "",
         short_id=ro.get("short-id") or ro.get("short_id") or "",
+        security=security,
+        path=path,
+        transport_host=thost,
+        mode=mode,
+        alpn=proxy.get("alpn") or "",
+        service_name=svc or proxy.get("grpc-service-name") or "",
     )
 
 
@@ -241,7 +356,7 @@ def _is_xray_profile(obj) -> bool:
 
 
 def _from_xray_profile(profile: dict) -> tuple[dict | None, int]:
-    """Один vless+Reality+tcp на профиль. Имя — remarks/ps/name/meta, не outbound.tag."""
+    """Один пригодный vless на профиль. Имя — remarks/ps/name/meta, не outbound.tag."""
     skipped = 0
     obs = profile.get("outbounds")
     if not isinstance(obs, list):
@@ -293,22 +408,50 @@ def _from_xray(ob: dict) -> dict | None:
     reality = stream.get("realitySettings") or stream.get("reality_settings") or {}
     if not isinstance(reality, dict):
         reality = {}
+    tls_set = stream.get("tlsSettings") or stream.get("tls_settings") or {}
+    if not isinstance(tls_set, dict):
+        tls_set = {}
     pbk = reality.get("publicKey") or reality.get("public_key") or ""
-    if security and security != "reality":
-        return None
-    if not security and not pbk:
-        return None
+    net = stream.get("network") or stream.get("net") or "tcp"
+    extra = {}
+    n = str(net or "").lower()
+    if n in ("xhttp", "splithttp"):
+        extra = stream.get("xhttpSettings") or stream.get("splithttpSettings") or stream.get("xhttp_settings") or {}
+    elif n in ("ws", "websocket"):
+        extra = stream.get("wsSettings") or stream.get("ws_settings") or {}
+    elif n == "grpc":
+        extra = stream.get("grpcSettings") or stream.get("grpc_settings") or {}
+    elif n == "httpupgrade":
+        extra = stream.get("httpupgradeSettings") or stream.get("httpupgrade_settings") or {}
+    elif n in ("http", "h2"):
+        extra = stream.get("httpSettings") or stream.get("http_settings") or {}
+    path, thost, mode, svc = _transport_bits(extra)
     return _node_from_parts(
         uuid=user.get("id") or user.get("uuid") or "",
         host=server.get("address") or server.get("addr") or "",
         port=server.get("port") or 443,
-        sni=reality.get("serverName") or reality.get("server_name") or stream.get("sni") or "",
+        sni=tls_set.get("serverName")
+        or tls_set.get("server_name")
+        or reality.get("serverName")
+        or reality.get("server_name")
+        or stream.get("sni")
+        or "",
         public_key=pbk,
-        fingerprint=reality.get("fingerprint") or reality.get("fp") or "firefox",
+        fingerprint=tls_set.get("fingerprint")
+        or tls_set.get("fp")
+        or reality.get("fingerprint")
+        or reality.get("fp")
+        or "firefox",
         flow=user.get("flow") or "",
-        net=stream.get("network") or stream.get("net") or "tcp",
+        net=net,
         tag=ob.get("tag") or "",
         short_id=reality.get("shortId") or reality.get("short_id") or "",
+        security=security,
+        path=path,
+        transport_host=thost,
+        mode=mode,
+        alpn=tls_set.get("alpn") or "",
+        service_name=svc,
     )
 
 
@@ -427,6 +570,30 @@ def parse_body(raw) -> dict:
     return {"ok": False, "nodes": [], "skipped": skipped, "why": "в подписке нет пригодного vless"}
 
 
+def fetch_error(exc: BaseException) -> str:
+    """Человеческий текст вместо `<urlopen error _ssl.c:…>`."""
+    text = str(exc).strip().lower()
+    if "редирект не на https" in text:
+        return "редирект не на https"
+    if "timed out" in text or "timeout" in text:
+        if "ssl" in text or "handshake" in text or "_ssl" in text:
+            return "сервер подписки не ответил по HTTPS — старый список не тронут"
+        return "сервер подписки не ответил — старый список не тронут"
+    if "certificate" in text or "ssl" in text or "tls" in text:
+        return "ошибка HTTPS у сервера подписки"
+    if "getaddrinfo" in text or "name or service not known" in text:
+        return "сервер подписки не найден (DNS)"
+    if "connection refused" in text:
+        return "сервер подписки отклонил соединение"
+    raw = str(exc).strip()
+    if raw.startswith("<urlopen error ") and raw.endswith(">"):
+        inner = raw[14:-1].strip()
+        if "_ssl.c:" in inner or "ssl" in inner.lower():
+            return "сервер подписки не ответил по HTTPS — старый список не тронут"
+        return inner or "нет сети"
+    return raw or "нет сети"
+
+
 def _download(url: str, ua: str) -> tuple[str | None, str]:
     if not str(url).lower().startswith("https://"):
         return None, "нужен https://"
@@ -443,10 +610,7 @@ def _download(url: str, ua: str) -> tuple[str | None, str]:
     except urllib.error.HTTPError as exc:
         return None, f"подписка {exc.code}"
     except (OSError, ValueError) as exc:
-        why = str(exc) or "нет сети"
-        if "редирект не на https" in why:
-            return None, "редирект не на https"
-        return None, why
+        return None, fetch_error(exc)
     if len(data) > MAX_BODY:
         return None, "ответ слишком большой"
     return data.decode("utf-8", errors="replace"), ""

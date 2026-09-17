@@ -22,7 +22,9 @@ build/
 *.zip
 
 # Local junk
-.cursor/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 .pytest_cache/
 __pycache__/
 *.pyc

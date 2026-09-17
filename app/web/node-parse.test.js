@@ -26,6 +26,21 @@ function throwsFail(raw, needle) {
 }
 
 {
+  const xhttp =
+    "vless://aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee@89.110.108.96:443" +
+    "?encryption=none&type=xhttp&path=%2Fxh&host=ned-06.hello-there.ru" +
+    "&mode=auto&security=tls&sni=ned-06.hello-there.ru&fp=firefox" +
+    "&alpn=h2%2Chttp%2F1.1#Netherlands";
+  const r = parseVlessUri(xhttp);
+  assert.strictEqual(r.ok, true, r.error);
+  assert.strictEqual(r.node.tag, "Netherlands");
+  assert.strictEqual(r.node.net, "xhttp");
+  assert.strictEqual(r.node.path, "/xh");
+  assert.strictEqual(r.node.transport_host, "ned-06.hello-there.ru");
+  assert.strictEqual(r.node.public_key, "");
+}
+
+{
   const r = parseNodes(GOOD);
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.nodes.length, 1);
@@ -36,8 +51,8 @@ throwsFail("hello world", "непонятный формат");
 throwsFail("vmess://aaaa", "не vmess");
 throwsFail("vless://not-a-uuid@host:443?security=reality&sni=x&pbk=yyyyyyyyyy", "не хватает");
 throwsFail(
-  "vless://aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee@host:443?security=tls&sni=x&pbk=yyyyyyyyyy",
-  "Reality"
+  "vless://aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee@host:443?security=none&sni=x",
+  "не хватает"
 );
 throwsFail("{not json", "битый JSON");
 throwsFail('{"foo":1}', "неизвестный JSON");

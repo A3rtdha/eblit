@@ -41,6 +41,27 @@ DNS_VIA_TUN = ["8.8.8.8/32", "8.8.4.4/32", "1.1.1.1/32", "1.0.0.1/32"]
 FAKEIP_RANGE = "198.18.0.0/15"
 DOH_BLOCK = ["dns.google", "cloudflare-dns.com", "one.one.one.one"]
 
+# Не google.com / googleapis.com / clients6.google.com — иначе поиск и Drive уедут в Lagom.
+GOOGLE_AI_SUFFIXES = [
+    "gemini.google.com",
+    "gemini.google",
+    "bard.google.com",
+    "aistudio.google.com",
+    "makersuite.google.com",
+    "generativeai.google",
+    "ai.google.dev",
+    "generativelanguage.googleapis.com",
+    "geller-pa.googleapis.com",
+    "proactivebackend-pa.googleapis.com",
+    "aisandbox-pa.googleapis.com",
+    "robinfrontend-pa.googleapis.com",
+    "aida.googleapis.com",
+    "alkalicore-pa.clients6.google.com",
+    "alkalimakersuite-pa.clients6.google.com",
+    "webchannel-alkalimakersuite-pa.clients6.google.com",
+    "autopush-alkalimakersuite-pa.clients6.google.com",
+]
+
 _IP_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 
 
@@ -183,6 +204,10 @@ def apply_lagom_suffixes(cfg: dict, suffixes: list[str]) -> None:
             continue
         seen.add(s)
         clean.append(s)
+    for s in GOOGLE_AI_SUFFIXES:
+        if s not in seen:
+            seen.add(s)
+            clean.append(s)
 
     route_rule = _find_rule(cfg, outbound=SELECTOR)
     if route_rule is not None:
@@ -303,7 +328,19 @@ def apply_narrow_tun(cfg: dict) -> None:
         apply_lagom_suffixes(cfg, suffixes)
 
 
+def ensure_seed_suffixes_file() -> bool:
+    """Дописать Gemini/AI Studio в живой config. Апдейт не затирает список — без этого их нет."""
+    cfg = read_config()
+    before = lagom_suffixes(cfg)
+    apply_lagom_suffixes(cfg, before)
+    if lagom_suffixes(cfg) == before:
+        return False
+    write_config(cfg)
+    return True
+
+
 def links() -> list[str]:
+    ensure_seed_suffixes_file()
     return lagom_suffixes()
 
 
@@ -322,6 +359,24 @@ def parsed_to_outbound(parsed: dict) -> dict:
     fp = str(parsed.get("fingerprint") or "firefox").strip() or "firefox"
     pbk = str(parsed.get("public_key") or "").strip()
     flow = str(parsed.get("flow") or "").strip()
+    net = str(parsed.get("net") or "tcp").lower()
+    if net == "splithttp":
+        net = "xhttp"
+    tls: dict = {
+        "enabled": True,
+        "server_name": sni,
+        "utls": {"enabled": True, "fingerprint": fp},
+    }
+    if pbk:
+        tls["reality"] = {"enabled": True, "public_key": pbk}
+        sid = str(parsed.get("short_id") or "").strip()
+        if sid:
+            tls["reality"]["short_id"] = sid
+    alpn = parsed.get("alpn")
+    if isinstance(alpn, str) and alpn.strip():
+        alpn = [p.strip() for p in alpn.split(",") if p.strip()]
+    if isinstance(alpn, list) and alpn:
+        tls["alpn"] = [str(x) for x in alpn if x]
     ob: dict = {
         "type": "vless",
         "tag": tag,
@@ -329,16 +384,49 @@ def parsed_to_outbound(parsed: dict) -> dict:
         "server_port": port,
         "uuid": uuid,
         "packet_encoding": "xudp",
-        "tls": {
-            "enabled": True,
-            "server_name": sni,
-            "utls": {"enabled": True, "fingerprint": fp},
-            "reality": {"enabled": True, "public_key": pbk},
-        },
+        "tls": tls,
     }
-    if flow:
+    if flow and net in ("", "tcp"):
         ob["flow"] = flow
+    transport = _vless_transport(parsed, net)
+    if transport:
+        ob["transport"] = transport
     return ob
+
+
+def _vless_transport(parsed: dict, net: str) -> dict | None:
+    if net in ("", "tcp", "raw"):
+        return None
+    tr: dict = {"type": net}
+    path = str(parsed.get("path") or "").strip()
+    thost = str(parsed.get("transport_host") or "").strip()
+    if net == "xhttp":
+        if path:
+            tr["path"] = path
+        if thost:
+            tr["host"] = thost
+        tr["mode"] = str(parsed.get("mode") or "auto").strip() or "auto"
+        # ponytail: extended отвергает пустой x_padding_bytes. 100-1000 — дефолт Xray.
+        tr["x_padding_bytes"] = {"from": 100, "to": 1000}
+        return tr
+    if net == "ws":
+        if path:
+            tr["path"] = path
+        if thost:
+            tr["headers"] = {"Host": thost}
+        return tr
+    if net == "grpc":
+        name = str(parsed.get("service_name") or path or "").strip()
+        if name:
+            tr["service_name"] = name
+        return tr
+    if net in ("httpupgrade", "http"):
+        if path:
+            tr["path"] = path
+        if thost:
+            tr["host"] = [thost] if net == "http" else thost
+        return tr
+    return None
 
 
 def _host_for(parsed: dict, outbound: dict) -> str:

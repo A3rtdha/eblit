@@ -274,7 +274,7 @@ class Bridge:
             return subscribe.refresh()
         except (OSError, ValueError) as exc:
             write(f"sub pull fail: {exc}")
-            return {**roster.stack_nodes(), "ok": False, "why": str(exc)}
+            return {**roster.stack_nodes(), "ok": False, "why": subscribe.fetch_error(exc)}
 
     def sub_refresh(self) -> dict:
         if self._sub_busy:
@@ -286,7 +286,7 @@ class Bridge:
                 self._push({**result, "kind": "sub"})
             except Exception as exc:  # поток: иначе спиннер в UI навсегда
                 write(f"sub fail: {exc}")
-                self._push({**roster.stack_nodes(), "ok": False, "kind": "sub", "why": str(exc)})
+                self._push({**roster.stack_nodes(), "ok": False, "kind": "sub", "why": subscribe.fetch_error(exc)})
             finally:
                 self._sub_busy = False
 

@@ -30,24 +30,54 @@
     return true;
   }
 
+  const NET_ALIAS = { raw: "tcp", splithttp: "xhttp", websocket: "ws", h2: "http" };
+  const NET_OK = { tcp: 1, xhttp: 1, ws: 1, grpc: 1, httpupgrade: 1, http: 1 };
+
+  function normNet(net) {
+    const n = String(net || "tcp").toLowerCase();
+    return NET_ALIAS[n] || n;
+  }
+
+  function firstHost(val) {
+    if (Array.isArray(val)) val = val.length ? val[0] : "";
+    return cleanHost(val);
+  }
+
+  function alpnList(raw) {
+    if (Array.isArray(raw)) return raw.map((x) => String(x).trim()).filter(Boolean);
+    return String(raw || "")
+      .replace(/;/g, ",")
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+  }
+
   function nodeFromParts(p) {
     const uuid = String(p.uuid || "").trim();
     const host = cleanHost(p.host);
     const port = Number(p.port);
     const sni = String(p.sni || "").trim();
-    const publicKey = String(p.publicKey || "").trim();
-    const net = String(p.net || "tcp").toLowerCase();
+    let publicKey = String(p.publicKey || "").trim();
+    const net = normNet(p.net);
+    const security = String(p.security || "").toLowerCase();
+    const flow = String(p.flow || "").trim();
     if (!UUID_RE.test(uuid)) return null;
     if (!validHost(host)) return null;
     if (!validPort(port)) return null;
     if (!sni) return null;
-    if (!publicKey) return null;
-    if (net && net !== "tcp") return null;
+    if (!NET_OK[net]) return null;
+    if (flow && net !== "tcp") return null;
+    if (publicKey && (!security || security === "reality")) {
+      /* reality */
+    } else if (security === "tls") {
+      publicKey = "";
+    } else {
+      return null;
+    }
     const tag = String(p.tag || p.name || host).trim() || host;
-    const flow = String(p.flow || "").trim();
     const fingerprint = String(p.fingerprint || "firefox").trim() || "firefox";
     const shortId = String(p.shortId || "").trim();
-    return {
+    const node = {
       tag: tag,
       name: tag,
       host: host,
@@ -59,7 +89,19 @@
       public_key: publicKey,
       flow: flow,
       short_id: shortId,
+      net: net,
     };
+    const path = String(p.path || "").trim();
+    if (path) node.path = path;
+    const thost = firstHost(p.transportHost);
+    if (thost) node.transport_host = thost;
+    const mode = String(p.mode || "").trim();
+    if (mode) node.mode = mode;
+    const alpn = alpnList(p.alpn);
+    if (alpn.length) node.alpn = alpn;
+    const svc = String(p.serviceName || "").trim();
+    if (svc) node.service_name = svc;
+    return node;
   }
 
   function parseVlessUri(uri) {
@@ -75,10 +117,6 @@
     const q = url.searchParams;
     const security = (q.get("security") || "").toLowerCase();
     const pbk = q.get("pbk") || q.get("publicKey") || "";
-    if (security && security !== "reality") {
-      return fail(`нужен Reality, не ${security}`);
-    }
-    if (!security && !pbk) return fail("нет security=reality и pbk");
     const node = nodeFromParts({
       uuid: decodeURIComponent(url.username || ""),
       host: url.hostname,
@@ -90,6 +128,12 @@
       net: q.get("type") || q.get("net") || "tcp",
       shortId: q.get("sid") || q.get("shortId") || "",
       name: url.hash ? decodeURIComponent(url.hash.slice(1)) : "",
+      security: security,
+      path: q.get("path") || "",
+      transportHost: q.get("host") || "",
+      mode: q.get("mode") || "",
+      alpn: q.get("alpn") || "",
+      serviceName: q.get("serviceName") || q.get("service_name") || "",
     });
     if (!node) return fail("в vless:// не хватает uuid, host, sni или pbk");
     return { ok: true, node: node };
@@ -101,18 +145,27 @@
     const tls = ob.tls && typeof ob.tls === "object" ? ob.tls : {};
     const reality = tls.reality && typeof tls.reality === "object" ? tls.reality : {};
     const utls = tls.utls && typeof tls.utls === "object" ? tls.utls : {};
+    const tr = ob.transport && typeof ob.transport === "object" ? ob.transport : {};
+    const headers = tr.headers && typeof tr.headers === "object" ? tr.headers : {};
+    const pbk = reality.public_key || reality.publicKey || "";
     return nodeFromParts({
       uuid: ob.uuid,
       host: ob.server,
       port: ob.server_port || ob.serverPort || 443,
       sni: tls.server_name || tls.serverName || "",
-      publicKey: reality.public_key || reality.publicKey || "",
+      publicKey: pbk,
       fingerprint: utls.fingerprint || "firefox",
       flow: ob.flow || "",
-      net: "tcp",
+      net: tr.type || "tcp",
       shortId: reality.short_id || reality.shortId || "",
       tag: ob.tag,
       name: ob.tag,
+      security: pbk ? "reality" : "tls",
+      path: tr.path || "",
+      transportHost: tr.host || headers.Host || headers.host || "",
+      mode: tr.mode || "",
+      alpn: tls.alpn || "",
+      serviceName: tr.service_name || "",
     });
   }
 
@@ -120,18 +173,26 @@
     if (!p || typeof p !== "object") return null;
     if (String(p.type || "").toLowerCase() !== "vless") return null;
     const ro = p["reality-opts"] || p.reality_opts || p.realityOpts || {};
+    const opts = p["xhttp-opts"] || p.xhttp_opts || p["ws-opts"] || p.ws_opts || p["grpc-opts"] || p.grpc_opts || {};
+    const pbk = ro["public-key"] || ro.public_key || ro.publicKey || "";
     return nodeFromParts({
       uuid: p.uuid,
       host: p.server,
       port: p.port || 443,
       sni: p.servername || p.server_name || p.sni || "",
-      publicKey: ro["public-key"] || ro.public_key || ro.publicKey || "",
+      publicKey: pbk,
       fingerprint: p["client-fingerprint"] || p.client_fingerprint || p.fp || "firefox",
       flow: p.flow || "",
       net: p.network || p.net || "tcp",
       shortId: ro["short-id"] || ro.short_id || "",
       tag: p.name,
       name: p.name,
+      security: pbk ? "reality" : "tls",
+      path: opts.path || "",
+      transportHost: opts.host || "",
+      mode: opts.mode || "",
+      alpn: p.alpn || "",
+      serviceName: opts.service_name || p["grpc-service-name"] || "",
     });
   }
 

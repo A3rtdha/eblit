@@ -4,7 +4,8 @@ from pathlib import Path
 
 WARP_MSI_URL = "https://downloads.cloudflareclient.com/v1/download/windows/ga"
 WEBVIEW2_URL = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
-SINGBOX_API = "https://api.github.com/repos/SagerNet/sing-box/releases/latest"
+# SagerNet не умеет xhttp. Форк — тот же JSON (Reality/TUN/fakeip), плюс XHTTP.
+SINGBOX_API = "https://api.github.com/repos/shtorm-7/sing-box-extended/releases/latest"
 
 
 def pick_singbox_zip(assets: list) -> str | None:
@@ -13,7 +14,7 @@ def pick_singbox_zip(assets: list) -> str | None:
             continue
         name = str(item.get("name") or "")
         url = item.get("browser_download_url")
-        if "windows-amd64.zip" in name and url:
+        if name.endswith("-windows-amd64.zip") and url:
             return str(url)
     return None
 

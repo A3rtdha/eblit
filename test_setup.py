@@ -22,6 +22,21 @@ class SingboxAsset(unittest.TestCase):
         )
         self.assertEqual(url, "good")
 
+    def test_picks_extended_zip_skips_purego(self):
+        url = pick_singbox_zip(
+            [
+                {
+                    "name": "sing-box-1.14.0-extended-2.7.1-windows-amd64-purego.zip",
+                    "browser_download_url": "purego",
+                },
+                {
+                    "name": "sing-box-1.14.0-extended-2.7.1-windows-amd64.zip",
+                    "browser_download_url": "extended",
+                },
+            ]
+        )
+        self.assertEqual(url, "extended")
+
     def test_empty_assets(self):
         self.assertIsNone(pick_singbox_zip([]))
         self.assertIsNone(pick_singbox_zip([{"name": "source.tar.gz"}]))

@@ -113,6 +113,40 @@ class ParseBody(unittest.TestCase):
         self.assertEqual(got["nodes"][0]["host"], "node.example")
         self.assertEqual(got["nodes"][0]["uuid"], UUID_A)
 
+    def test_xhttp_tls_uri(self):
+        raw = (
+            f"vless://{UUID_A}@89.110.108.96:443"
+            "?encryption=none&type=xhttp&path=%2Fxh&host=ned-06.hello-there.ru"
+            "&mode=auto&security=tls&sni=ned-06.hello-there.ru&fp=firefox"
+            "&alpn=h2%2Chttp%2F1.1#Netherlands"
+        )
+        got = subscribe.parse_body(raw)
+        self.assertTrue(got["ok"], got.get("why"))
+        self.assertEqual(len(got["nodes"]), 1)
+        node = got["nodes"][0]
+        self.assertEqual(node["tag"], "Netherlands")
+        self.assertEqual(node["host"], "89.110.108.96")
+        self.assertEqual(node["sni"], "ned-06.hello-there.ru")
+        self.assertEqual(node["net"], "xhttp")
+        self.assertEqual(node["path"], "/xh")
+        self.assertEqual(node["transport_host"], "ned-06.hello-there.ru")
+        self.assertEqual(node["mode"], "auto")
+        self.assertEqual(node["alpn"], ["h2", "http/1.1"])
+        self.assertEqual(node["public_key"], "")
+        self.assertEqual(node["uuid"], UUID_A)
+
+    def test_xhttp_keeps_reality_in_same_list(self):
+        raw = (
+            f"vless://{UUID_A}@89.110.108.96:443?type=xhttp&path=%2Fxh"
+            "&host=ned-06.hello-there.ru&mode=auto&security=tls"
+            "&sni=ned-06.hello-there.ru#Netherlands\n"
+            + vless_uri()
+        )
+        got = subscribe.parse_body(raw)
+        self.assertTrue(got["ok"])
+        tags = {n["tag"] for n in got["nodes"]}
+        self.assertEqual(tags, {"Netherlands", "Finland"})
+
     def test_base64_list(self):
         raw = vless_uri() + "\n" + vless_uri("Sweden", "edge.example", uuid=UUID_B)
         blob = base64.b64encode(raw.encode()).decode()
@@ -416,6 +450,11 @@ class SyncAndFetch(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("Finland", self._tags())
         self.assertIn("Sweden", self._tags())
+
+    def test_fetch_error_hides_ssl_internals(self):
+        raw = "<urlopen error _ssl.c:993: The handshake operation timed out>"
+        self.assertNotIn("_ssl", subscribe.fetch_error(OSError(raw)))
+        self.assertIn("старый список", subscribe.fetch_error(OSError(raw)))
 
     def test_zero_usable_does_not_wipe(self):
         parsed = subscribe.parse_body(vless_uri())

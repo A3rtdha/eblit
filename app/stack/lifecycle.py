@@ -8,6 +8,13 @@ from app.stack import health, lan, probe, singbox, subscribe, warp
 
 def start() -> dict:
     write("подключение: старт")
+    try:
+        from app.stack import nodes
+
+        if nodes.ensure_seed_suffixes_file():
+            write("домены: Gemini/AI Studio дописаны в список")
+    except (OSError, ValueError, TypeError) as exc:
+        write(f"домены: {exc}")
     singbox.kill()
     time.sleep(2)
     try:

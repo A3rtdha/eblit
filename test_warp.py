@@ -194,6 +194,26 @@ class OpenGui(unittest.TestCase):
         self.assertNotEqual(kwargs.get("creationflags", 0), CREATE_NO_WINDOW)
 
 
+class SocksOk(unittest.TestCase):
+    def test_timeout_is_not_ready(self):
+        with patch.object(
+            warp, "hidden", side_effect=subprocess.TimeoutExpired(["curl.exe"], 8)
+        ):
+            self.assertFalse(warp.socks_ok())
+
+    def test_http_is_ready(self):
+        seen: list[list[str]] = []
+
+        def fake(args, **_kw):
+            seen.append(list(args))
+            return proc(args, 0, out="HTTP/1.1 200 Connection established\n\nHTTP/2 200\n")
+
+        with patch.object(warp, "hidden", side_effect=fake):
+            self.assertTrue(warp.socks_ok())
+        self.assertIn("--max-time", seen[0])
+        self.assertEqual(seen[0][seen[0].index("--max-time") + 1], "7")
+
+
 class WaitReady(unittest.TestCase):
     def test_short_tries_stops_early(self):
         with (

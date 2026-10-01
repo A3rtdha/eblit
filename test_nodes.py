@@ -163,6 +163,41 @@ class NodesIO(unittest.TestCase):
         dns_rule = next(r for r in cfg["dns"]["rules"] if r.get("server") == "fakeip")
         self.assertEqual(dns_rule["domain_suffix"], suffixes)
 
+    def test_telegram_cidrs_append_and_stay_idempotent(self):
+        cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
+        cfg["inbounds"] = [
+            {
+                "type": "tun",
+                "route_address": ["151.101.0.0/16", "198.18.0.0/15"],
+            }
+        ]
+        self.cfg.write_text(json.dumps(cfg), encoding="utf-8")
+        self.assertTrue(nodes.ensure_telegram_cidrs_file())
+        saved = json.loads(self.cfg.read_text(encoding="utf-8"))
+        routes = saved["inbounds"][0]["route_address"]
+        self.assertEqual(routes[:2], ["151.101.0.0/16", "198.18.0.0/15"])
+        for cidr in nodes.TELEGRAM_CIDRS:
+            self.assertEqual(routes.count(cidr), 1)
+        rules = saved["route"]["rules"]
+        self.assertEqual(rules[0]["domain_suffix"], ["grok.com"])
+        tg = next(r for r in rules if r.get("ip_cidr"))
+        self.assertEqual(tg["ip_cidr"], nodes.TELEGRAM_CIDRS)
+        self.assertEqual(tg["outbound"], "LagomVPN")
+        self.assertFalse(nodes.ensure_telegram_cidrs_file())
+
+    def test_telegram_cidrs_fill_partial_rule_without_tun(self):
+        cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
+        cfg["route"]["rules"].append(
+            {"ip_cidr": ["149.154.160.0/20"], "outbound": "LagomVPN"}
+        )
+        self.cfg.write_text(json.dumps(cfg), encoding="utf-8")
+        self.assertTrue(nodes.ensure_telegram_cidrs_file())
+        saved = json.loads(self.cfg.read_text(encoding="utf-8"))
+        tg = [r for r in saved["route"]["rules"] if r.get("ip_cidr")]
+        self.assertEqual(len(tg), 1)
+        self.assertEqual(tg[0]["ip_cidr"], nodes.TELEGRAM_CIDRS)
+        self.assertNotIn("inbounds", saved)
+
     def test_duplicate_add_raises(self):
         nodes.add(NODE_PARSED)
         with self.assertRaises(ValueError):

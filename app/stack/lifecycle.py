@@ -13,6 +13,8 @@ def start() -> dict:
 
         if nodes.ensure_seed_suffixes_file():
             write("домены: Gemini/AI Studio дописаны в список")
+        if nodes.ensure_telegram_cidrs_file():
+            write("telegram: DC-сети в TUN")
     except (OSError, ValueError, TypeError) as exc:
         write(f"домены: {exc}")
     singbox.kill()
@@ -63,6 +65,13 @@ def stop() -> dict:
 
 def reload() -> dict:
     write("подключение: перезапуск")
+    try:
+        from app.stack import nodes
+
+        if nodes.ensure_telegram_cidrs_file():
+            write("telegram: DC-сети в TUN")
+    except (OSError, ValueError, TypeError) as exc:
+        write(f"telegram: {exc}")
     if health.main() != 0:
         write("health: нет живого сервера — перезапуск как есть")
     ok, err = singbox.check()

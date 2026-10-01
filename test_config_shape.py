@@ -30,6 +30,16 @@ class ConfigShape(unittest.TestCase):
         self.assertIn(nodes.FAKEIP_RANGE, routes)
         for cidr in nodes.DNS_VIA_TUN:
             self.assertIn(cidr, routes)
+        for cidr in nodes.TELEGRAM_CIDRS:
+            self.assertIn(cidr, routes)
+        tg = next(
+            r
+            for r in cfg["route"]["rules"]
+            if isinstance(r, dict)
+            and r.get("outbound") == "LagomVPN"
+            and isinstance(r.get("ip_cidr"), list)
+        )
+        self.assertEqual(tg["ip_cidr"], nodes.TELEGRAM_CIDRS)
         self.assertEqual(tun.get("address"), ["172.19.88.1/30"])
 
         dns_servers = {s.get("tag"): s for s in cfg["dns"]["servers"] if isinstance(s, dict)}

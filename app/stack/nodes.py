@@ -38,6 +38,20 @@ FASTLY_CIDRS = [
 ]
 
 DNS_VIA_TUN = ["8.8.8.8/32", "8.8.4.4/32", "1.1.1.1/32", "1.0.0.1/32"]
+
+# https://core.telegram.org/resources/cidr.txt — клиент ходит на DC по IP, не по имени.
+# ponytail: только IPv4. v6 из того файла потребует inet6 на TUN; десктоп откатывается на v4.
+TELEGRAM_CIDRS = [
+    "91.108.56.0/22",
+    "91.108.4.0/22",
+    "91.108.8.0/22",
+    "91.108.16.0/22",
+    "91.108.12.0/22",
+    "149.154.160.0/20",
+    "91.105.192.0/23",
+    "91.108.20.0/22",
+    "185.76.151.0/24",
+]
 FAKEIP_RANGE = "198.18.0.0/15"
 DOH_BLOCK = ["dns.google", "cloudflare-dns.com", "one.one.one.one"]
 
@@ -304,7 +318,7 @@ def apply_narrow_tun(cfg: dict) -> None:
         inbound.pop("inet4_route_address", None)
         inbound["address"] = ["172.19.88.1/30"]
         inbound.pop("inet4_address", None)
-        inbound["route_address"] = [*FASTLY_CIDRS, FAKEIP_RANGE, *DNS_VIA_TUN]
+        inbound["route_address"] = [*FASTLY_CIDRS, FAKEIP_RANGE, *DNS_VIA_TUN, *TELEGRAM_CIDRS]
 
     dns = cfg.setdefault("dns", {})
     servers = dns.setdefault("servers", [])
@@ -326,6 +340,7 @@ def apply_narrow_tun(cfg: dict) -> None:
     suffixes = lagom_suffixes(cfg)
     if suffixes:
         apply_lagom_suffixes(cfg, suffixes)
+    apply_telegram_cidrs(cfg)
 
 
 def ensure_seed_suffixes_file() -> bool:
@@ -334,6 +349,57 @@ def ensure_seed_suffixes_file() -> bool:
     before = lagom_suffixes(cfg)
     apply_lagom_suffixes(cfg, before)
     if lagom_suffixes(cfg) == before:
+        return False
+    write_config(cfg)
+    return True
+
+
+def _is_telegram_rule(rule: dict) -> bool:
+    return (
+        rule.get("outbound") == SELECTOR
+        and isinstance(rule.get("ip_cidr"), list)
+        and "domain_suffix" not in rule
+    )
+
+
+def apply_telegram_cidrs(cfg: dict) -> bool:
+    """DC Telegram в TUN и в Lagom. Чужие route_address и доменные правила не трогает."""
+    changed = False
+    for inbound in cfg.get("inbounds", []):
+        if not isinstance(inbound, dict) or inbound.get("type") != "tun":
+            continue
+        routes = inbound.get("route_address")
+        if not isinstance(routes, list):
+            routes = []
+            inbound["route_address"] = routes
+            changed = True
+        have = {str(item) for item in routes}
+        for cidr in TELEGRAM_CIDRS:
+            if cidr not in have:
+                routes.append(cidr)
+                have.add(cidr)
+                changed = True
+
+    route = cfg.setdefault("route", {})
+    if not isinstance(route, dict):
+        return changed
+    rules = route.setdefault("rules", [])
+    if not isinstance(rules, list):
+        return changed
+    found = next((rule for rule in rules if isinstance(rule, dict) and _is_telegram_rule(rule)), None)
+    wanted = list(TELEGRAM_CIDRS)
+    if found is None:
+        rules.append({"ip_cidr": wanted, "outbound": SELECTOR})
+        return True
+    if found.get("ip_cidr") != wanted:
+        found["ip_cidr"] = wanted
+        return True
+    return changed
+
+
+def ensure_telegram_cidrs_file() -> bool:
+    cfg = read_config()
+    if not apply_telegram_cidrs(cfg):
         return False
     write_config(cfg)
     return True

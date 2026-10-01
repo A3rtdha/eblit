@@ -1,5 +1,5 @@
 ## Что нового
 
-Ядро — sing-box-extended: старые Reality-ноды как были, плюс vless TLS/xhttp из подписки. При апдейте новый `sing-box.exe` пишется поверх старого.
+Таймаут проверки WARP больше не валит установку. Если SOCKS `:40000` молчит, сетап дописывает лог и заканчивается — подключение дожмёт Eblit.
 
-Gemini и AI Studio идут в Lagom (`aistudio.google.com`, alkali RPC, `generativelanguage.googleapis.com`), не `google.com`. Если список доменов уже был свой, установщик и старт эти суффиксы допишут — больше не теряются.
+Сети датацентров Telegram (IPv4) идут в TUN и в Lagom. Старт и перезапуск дописывают их в уже стоящий config.

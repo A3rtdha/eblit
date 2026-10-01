@@ -146,19 +146,25 @@ def reset_mode() -> None:
 
 
 def socks_ok() -> bool:
-    r = hidden(
-        [
-            "curl.exe",
-            "-4",
-            "--socks5-hostname",
-            SOCKS,
-            "-sI",
-            "--connect-timeout",
-            "3",
-            SPOTIFY,
-        ],
-        timeout=8,
-    )
+    """False, если :40000 молчит. Таймаут curl — не исключение: сетап и тик ждут ретрай."""
+    try:
+        r = hidden(
+            [
+                "curl.exe",
+                "-4",
+                "--socks5-hostname",
+                SOCKS,
+                "-sI",
+                "--connect-timeout",
+                "3",
+                "--max-time",
+                "7",
+                SPOTIFY,
+            ],
+            timeout=8,
+        )
+    except subprocess.TimeoutExpired:
+        return False
     return has_http(r.stdout)
 
 

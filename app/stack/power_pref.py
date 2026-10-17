@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import app.paths as paths
+from app.storage import atomic_write
 
 POWER_FILE = "eblit-power.json"
 
@@ -32,8 +33,6 @@ def is_on() -> bool:
 
 def set_on(on: bool) -> dict:
     path = _path()
-    tmp = path.with_suffix(path.suffix + ".tmp")
     payload = {"on": bool(on)}
-    tmp.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    atomic_write(path, json.dumps(payload) + "\n")
     return {"ok": True, **payload}

@@ -214,7 +214,7 @@ main {
   border-color: rgba(138,174,180,.34);
   animation: pulse 1.9s ease-out infinite;
 }
-.island.busy button {
+.island.busy button:not([data-action="stop"]) {
   pointer-events: none;
   color: rgba(255,255,255,.22);
 }
@@ -801,7 +801,9 @@ textarea {
   align-items: center;
   gap: 9px;
   font-size: 13px;
-  color: rgba(255,255,255,.5);
+  color: rgba(255,255,255,.78);
+  min-width: 0;
+  padding: 5px 0;
 }
 .server-list li.on .geo-name { color: var(--live); }
 .server-list li.on .geo-now { display: block; }
@@ -845,14 +847,26 @@ textarea {
   background: rgba(255,255,255,.18);
 }
 .geo-body {
+  flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
+  border: 0;
+  padding: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
 }
+.geo-body:hover { background: rgba(255,255,255,.06); }
+.geo-body:focus-visible { outline: 1px solid var(--live); }
 .geo-host {
   font-size: 11.5px;
-  color: rgba(255,255,255,.24);
+  color: rgba(255,255,255,.5);
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

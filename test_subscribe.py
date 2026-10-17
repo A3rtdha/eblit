@@ -80,7 +80,7 @@ def happ_profile(*outbounds, remarks="Finland") -> dict:
 
 BASE_CFG = {
     "outbounds": [
-        {"type": "selector", "tag": "LagomVPN", "outbounds": ["Sweden"]},
+        {"type": "selector", "tag": "proxy-select", "outbounds": ["Sweden"]},
         {
             "type": "vless",
             "tag": "Sweden",
@@ -97,7 +97,7 @@ BASE_CFG = {
         {"type": "direct", "tag": "direct"},
     ],
     "route": {
-        "rules": [{"domain_suffix": ["grok.com"], "outbound": "LagomVPN"}],
+        "rules": [{"domain_suffix": ["grok.com"], "outbound": "proxy-select"}],
         "final": "direct",
     },
     "dns": {"servers": [], "rules": [], "final": "google"},
@@ -498,16 +498,16 @@ class SyncAndFetch(unittest.TestCase):
         self.assertNotIn("Home", owned)
 
     def test_sync_fills_empty_selector(self):
-        """Пустой LagomVPN → missing tags. Синк обязан выбрать живой тег."""
+        """Пустой proxy-select → missing tags. Синк обязан выбрать живой тег."""
         cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
         for ob in cfg["outbounds"]:
-            if ob.get("tag") == "LagomVPN":
+            if ob.get("tag") == "proxy-select":
                 ob["outbounds"] = []
         self.cfg.write_text(json.dumps(cfg), encoding="utf-8")
         result = subscribe.sync(subscribe.parse_body(vless_uri())["nodes"])
         self.assertTrue(result["ok"])
         cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
-        sel = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "LagomVPN")
+        sel = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "proxy-select")
         self.assertTrue(sel["outbounds"])
         self.assertTrue(set(sel["outbounds"]) <= set(self._tags()) | {"direct"})
 
@@ -522,7 +522,7 @@ class SyncAndFetch(unittest.TestCase):
         self.assertNotIn("Finland", tags)
         self.assertIn("Japan", tags)
         cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
-        sel = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "LagomVPN")
+        sel = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "proxy-select")
         self.assertTrue(sel["outbounds"])
         self.assertNotIn("Finland", sel["outbounds"])
         self.assertFalse((self.dir / nodes.FAV_FILE).is_file())
@@ -563,7 +563,7 @@ class SyncAndFetch(unittest.TestCase):
         self.assertIn("Sweden", tags)
         self.assertEqual(subscribe.get()["tags"], ["Germany"])
         cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
-        sel = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "LagomVPN")
+        sel = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "proxy-select")
         self.assertTrue(sel["outbounds"])
         self.assertIn("Germany", sel["outbounds"])
         self.assertNotIn("proxy-2", sel["outbounds"])

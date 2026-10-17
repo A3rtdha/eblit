@@ -27,7 +27,7 @@ NODE = {
 def cfg_with(*nodes: dict, selector: list | None = None) -> dict:
     outbounds: list[dict] = []
     if selector is not None:
-        outbounds.append({"type": "selector", "tag": "LagomVPN", "outbounds": selector})
+        outbounds.append({"type": "selector", "tag": "proxy-select", "outbounds": selector})
     outbounds.extend(nodes)
     outbounds.append({"type": "direct", "tag": "direct"})
     return {"outbounds": outbounds}
@@ -55,7 +55,7 @@ class Roster(unittest.TestCase):
         self.assertEqual(node["ip"], "203.0.113.10")
         self.assertEqual(node["port"], 443)
         self.assertEqual(node["sni"], "grok.com")
-        self.assertEqual(node["host"], "grok.com")
+        self.assertEqual(node["host"], "")
         self.assertTrue(node["current"])
         self.assertEqual(r["selected"], "Finland")
 
@@ -76,7 +76,7 @@ class Roster(unittest.TestCase):
 
     def test_pick_read_when_present(self):
         self.write_cfg(cfg_with(NODE, selector=["Finland"]))
-        (self.dir / "lagom-pick.json").write_text(
+        (self.dir / "eblit-pick.json").write_text(
             json.dumps({"tag": "Finland", "ip": "203.0.113.10"}), encoding="utf-8"
         )
         r = roster.stack_nodes()
@@ -90,7 +90,7 @@ class Roster(unittest.TestCase):
 
     def test_pick_broken_is_none_not_error(self):
         self.write_cfg(cfg_with(NODE, selector=["Finland"]))
-        (self.dir / "lagom-pick.json").write_text("{ не json", encoding="utf-8")
+        (self.dir / "eblit-pick.json").write_text("{ не json", encoding="utf-8")
         r = roster.stack_nodes()
         self.assertTrue(r["ok"])
         self.assertIsNone(r["pick"])
@@ -98,7 +98,7 @@ class Roster(unittest.TestCase):
     def test_ips_file_gives_host_for_unknown_tag(self):
         custom = {"type": "vless", "tag": "Mars", "server": "9.9.9.9"}
         self.write_cfg(cfg_with(custom, selector=["Mars"]))
-        (self.dir / "lagom-ips.json").write_text(
+        (self.dir / "eblit-ips.json").write_text(
             json.dumps({"redplanet.example": "9.9.9.9"}), encoding="utf-8"
         )
         r = roster.stack_nodes()

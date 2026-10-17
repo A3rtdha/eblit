@@ -1,4 +1,4 @@
-"""Config shape for narrow TUN and Lagom lists."""
+"""Config shape for narrow TUN and VLESS lists."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ class ConfigShape(unittest.TestCase):
             r
             for r in cfg["route"]["rules"]
             if isinstance(r, dict)
-            and r.get("outbound") == "LagomVPN"
+            and r.get("outbound") == "proxy-select"
             and isinstance(r.get("ip_cidr"), list)
         )
         self.assertEqual(tg["ip_cidr"], nodes.TELEGRAM_CIDRS)
@@ -53,9 +53,9 @@ class ConfigShape(unittest.TestCase):
         )
         self.assertEqual(set(reject["domain"]), set(nodes.DOH_BLOCK))
 
-    def test_lagom_suffixes_match_dns_and_route(self):
+    def test_proxy_suffixes_match_dns_and_route(self):
         cfg = load_cfg()
-        route_suffixes = nodes.lagom_suffixes(cfg)
+        route_suffixes = nodes.proxy_suffixes(cfg)
         dns_rule = next(
             r for r in cfg["dns"]["rules"] if isinstance(r, dict) and r.get("server") == "fakeip"
         )
@@ -76,7 +76,7 @@ class ExampleIsSafe(unittest.TestCase):
         """Пример = то, что уедет в установщик. Личных нод и их обходов быть не должно."""
         cfg = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
         self.assertEqual([o for o in cfg["outbounds"] if o.get("type") == "vless"], [])
-        sel = next(o for o in cfg["outbounds"] if o.get("tag") == "LagomVPN")
+        sel = next(o for o in cfg["outbounds"] if o.get("tag") == "proxy-select")
         self.assertEqual(sel["outbounds"], ["direct"])
         for rule in cfg.get("route", {}).get("rules", []):
             if not isinstance(rule, dict) or rule.get("outbound") != "direct":

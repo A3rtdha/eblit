@@ -129,4 +129,12 @@ throwsFail(
   assert.strictEqual(r.nodes.length, 2);
 }
 
+
+{
+  const { displayName } = require("./node-parse.js");
+  assert.strictEqual(displayName("🇪🇪 Estonia | No ads"), "[EE] Estonia | No ads");
+  assert.strictEqual(displayName("🇪🇺 ⚡ Основной Wi-Fi ⚡"), "[EU] ⚡ Основной Wi-Fi ⚡");
+  assert.strictEqual(displayName("Custom"), "Custom");
+}
+
 console.log("node-parse ok");

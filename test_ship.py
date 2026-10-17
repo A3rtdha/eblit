@@ -18,13 +18,13 @@ def _cfg() -> dict:
             {"type": "mixed", "tag": "mixed-local", "listen": "0.0.0.0", "listen_port": 2080},
         ],
         "outbounds": [
-            {"type": "selector", "tag": "LagomVPN", "outbounds": ["MyPrivate"]},
+            {"type": "selector", "tag": "proxy-select", "outbounds": ["MyPrivate"]},
             {"type": "vless", "tag": "Sweden", "server": "203.0.113.10", "uuid": "u"},
             {"type": "vless", "tag": "MyPrivate", "server": "1.2.3.4", "uuid": "secret"},
             {"type": "socks", "tag": "warp", "server": "127.0.0.1", "server_port": 40000},
             {"type": "direct", "tag": "direct"},
         ],
-        "route": {"rules": [{"domain_suffix": ["grok.com"], "outbound": "LagomVPN"}]},
+        "route": {"rules": [{"domain_suffix": ["grok.com"], "outbound": "proxy-select"}]},
     }
 
 
@@ -37,7 +37,7 @@ class Sanitize(unittest.TestCase):
 
     def test_selector_points_at_direct(self):
         out = nodes.sanitize_for_ship(_cfg())
-        sel = next(o for o in out["outbounds"] if o.get("tag") == "LagomVPN")
+        sel = next(o for o in out["outbounds"] if o.get("tag") == "proxy-select")
         self.assertEqual(sel["outbounds"], ["direct"])
 
     def test_lan_reset_off(self):
@@ -105,7 +105,7 @@ class LiveShip(unittest.TestCase):
             out = nodes.sanitize_for_ship(json.loads(path.read_text(encoding="utf-8")))
             tags = [o["tag"] for o in out["outbounds"] if o.get("type") == "vless"]
             self.assertEqual(tags, [], msg=name)
-            sel = next(o for o in out["outbounds"] if o.get("tag") == "LagomVPN")
+            sel = next(o for o in out["outbounds"] if o.get("tag") == "proxy-select")
             self.assertEqual(sel["outbounds"], ["direct"], msg=name)
             for rule in out.get("route", {}).get("rules", []):
                 if not isinstance(rule, dict) or rule.get("outbound") != "direct":
@@ -120,12 +120,12 @@ class ShipSkip(unittest.TestCase):
         from app.pack import main as pack_main
         from app.setup import install
 
-        self.assertIn("lagom-sub.json", install._SKIP_PAYLOAD)
+        self.assertIn("eblit-sub.json", install._SKIP_PAYLOAD)
         self.assertIn("eblit-power.json", install._SKIP_PAYLOAD)
         self.assertIn("eblit-first.json", install._SKIP_PAYLOAD)
         src = Path(pack_main.__code__.co_filename).read_text(encoding="utf-8")
-        self.assertIn("eblit-power.json", src)
-        self.assertIn("eblit-first.json", src)
+        self.assertIn("eblit-*.json", src)
+        self.assertIn("lagom-*.json", src)
 
 
 class BadLeg(unittest.TestCase):

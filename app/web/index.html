@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>Eblit</title>
-  <link rel="stylesheet" href="styles.css?v=41" />
+  <link rel="stylesheet" href="styles.css?v=42" />
 </head>
 <body>
   <div class="bg"></div>
@@ -61,7 +61,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>
           </span>
         </div>
-        <button type="button" class="ver" id="ver" title="Проверить обновление">1.4.3</button>
+        <button type="button" class="ver" id="ver" title="Проверить обновление">…</button>
         <div class="float-dock">
           <button type="button" class="ghost" data-action="guide" aria-label="Гайд" title="Гайд">
             <span>i</span>
@@ -94,7 +94,7 @@
                   <select id="sel-node" tabindex="-1" aria-hidden="true">
                     <option value="auto">Первый живой</option>
                   </select>
-                  <button type="button" class="combo-btn" id="sel-node-btn" aria-label="Сервер Lagom" aria-haspopup="listbox" aria-expanded="false" aria-controls="sel-node-menu">Первый живой</button>
+                  <button type="button" class="combo-btn" id="sel-node-btn" aria-label="Сервер VLESS" aria-haspopup="listbox" aria-expanded="false" aria-controls="sel-node-menu">Первый живой</button>
                   <ul class="combo-menu" id="sel-node-menu" role="listbox" hidden></ul>
                 </div>
                 <button type="button" class="node-ico node-plus" id="btn-node-compose" aria-label="Добавить" title="Добавить">
@@ -124,8 +124,8 @@
           <section class="block">
             <h2>Ссылки</h2>
             <label class="field">
-              <span>Домены Lagom</span>
-              <input type="text" id="links-input" spellcheck="false" aria-label="Домены Lagom" value="" />
+              <span>Домены VLESS</span>
+              <input type="text" id="links-input" spellcheck="false" aria-label="Домены VLESS" value="" />
             </label>
             <div class="links-row">
               <button type="button" id="btn-links-export" aria-label="Экспорт">Экспорт</button>
@@ -213,7 +213,7 @@
             <p>Eblit не заворачивает в туннель весь интернет. Он разбирает трафик и отправляет каждый вид туда, где тот оживает, — остальное идёт напрямую и не теряет в скорости.</p>
             <dl class="route">
               <div><dt>Fastly, Spotify</dt><dd>через WARP</dd></div>
-              <div><dt>ИИ-сервисы, Meta и очки</dt><dd>через Lagom</dd></div>
+              <div><dt>ИИ-сервисы, Meta и очки</dt><dd>через VLESS</dd></div>
               <div><dt>игры, Discord, всё прочее</dt><dd>напрямую</dd></div>
             </dl>
           </section>
@@ -230,12 +230,12 @@
 
           <section class="block">
             <h2>Настройки</h2>
-            <p><b>Серверы</b> — выбор гео Lagom или «Первый живой», ссылка подписки или свой vless. <b>Домены</b> — какие суффиксы гнать через Lagom. <b>Пробы</b> — как часто щупать сервисы и чинить обрыв. <b>Окно</b> — автозапуск с Windows и сворачивание в трей.</p>
+            <p><b>Серверы</b> — выбор гео VLESS или «Первый живой», ссылка подписки или свой vless. <b>Домены</b> — какие суффиксы гнать через VLESS. <b>Пробы</b> — как часто щупать сервисы и чинить обрыв. <b>Окно</b> — автозапуск с Windows и сворачивание в трей.</p>
           </section>
 
           <section class="block">
             <h2>Шлем и телефон</h2>
-            <p>В настройках включаешь «Раздавать прокси в локальную сеть». Если питание уже горит, подключение перезапустится само — без этого порт останется только на компьютере. Адрес из поля вбивается в Wi-Fi устройства как HTTP-прокси. Через него уедут те же домены, что и на ПК: Spotify через WARP, ИИ и Meta/Quest через Lagom. Игры и Discord с устройства пойдут напрямую.</p>
+            <p>В настройках включаешь «Раздавать прокси в локальную сеть». Если питание уже горит, подключение перезапустится само — без этого порт останется только на компьютере. Адрес из поля вбивается в Wi-Fi устройства как HTTP-прокси. Через него уедут те же домены, что и на ПК: Spotify через WARP, ИИ и Meta/Quest через VLESS. Игры и Discord с устройства пойдут напрямую.</p>
           </section>
 
           <section class="block">
@@ -284,9 +284,9 @@
 
           <section class="block">
             <h2><span class="first-n">4</span>Дальше</h2>
-            <p>Кнопка станет активной через полминуты — успеешь прочитать. Windows спросит права, согласись. Три значка внизу станут бирюзовыми, когда всё живо.</p>
+            <p>Нажми «Понял, включить». Windows спросит права администратора для подключения. Три значка внизу станут бирюзовыми, когда всё живо.</p>
             <p class="first-err" id="first-msg" hidden></p>
-            <button type="button" class="first-go" id="btn-first-go" disabled>Понял, включить · 30</button>
+            <button type="button" class="first-go" id="btn-first-go" disabled>Понял, включить</button>
           </section>
         </div>
       </section>
@@ -301,7 +301,7 @@
     </div>
   </div>
 
-  <script src="node-parse.js?v=19"></script>
-  <script src="app.js?v=46"></script>
+  <script src="node-parse.js?v=20"></script>
+  <script src="app.js?v=48"></script>
 </body>
 </html>

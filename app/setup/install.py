@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
@@ -22,14 +23,17 @@ DEST = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Eblit"
 # Sidecar'ы сборщика и его runtime-снимки. Даже если pack забыл вычистить dist —
 # в Program Files они не должны оказаться.
 _SKIP_PAYLOAD = {
-    "lagom-nodes.json",
-    "lagom-ips.json",
-    "lagom-pick.json",
-    "lagom-favorite.json",
-    "lagom-probe.json",
-    "lagom-sub.json",
+    "eblit-nodes.json",
+    "eblit-ips.json",
+    "eblit-pick.json",
+    "eblit-favorite.json",
+    "eblit-probe.json",
+    "eblit-sub.json",
     "eblit-power.json",
     "eblit-first.json",
+    "eblit-warp.json",
+    ".data-root-v1",
+    ".legacy-names-v2",
 }
 
 STEPS = (
@@ -112,8 +116,8 @@ def warp_ok() -> bool:
 def _stop_running() -> bool:
     """taskkill молча фейлится (нет прав, авторестарт) — проверяем, что процессы ушли."""
     kill_image("Eblit.exe")
-    kill_image("sing-box.exe")
-    if not singbox.wait_gone(tries=10):
+    singbox.kill(executable=DEST / "sing-box.exe")
+    if not singbox.wait_gone(tries=10, executable=DEST / "sing-box.exe"):
         return False
     for _ in range(10):
         if not image_running("Eblit.exe"):
@@ -145,7 +149,7 @@ def _keep_existing_config(path: Path) -> bool:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return False
-    return isinstance(data, dict) and nodes.has_user_vless(data)
+    return isinstance(data, dict) and isinstance(data.get("outbounds"), list)
 
 
 def _copy_payload() -> None:
@@ -158,12 +162,14 @@ def _copy_payload() -> None:
     DEST.mkdir(parents=True, exist_ok=True)
     for item in src.iterdir():
         dest = DEST / item.name
-        if item.name in _SKIP_PAYLOAD or item.name.startswith("_probe") or item.suffix == ".log":
+        if item.name in _SKIP_PAYLOAD or item.name.startswith(("_probe", "lagom-")) or item.suffix in {".log", ".tmp", ".lock"}:
             continue
-        # Свои добавленные ноды бережём. Семёрка из утечки 1.0.0 — нет.
         if item.name == "config.json" and dest.is_file() and _keep_existing_config(dest):
-            _log("config.json со своими нодами — не трогаю")
+            _log("сохраняю существующий config.json")
             continue
+        if item.name == "config.json" and dest.is_file():
+            backup = dest.with_name(f"config.corrupt-{time.time_ns()}.json")
+            shutil.copy2(dest, backup)
         if item.is_dir():
             if dest.exists():
                 shutil.rmtree(dest)
@@ -237,7 +243,7 @@ def _check_singbox() -> bool:
 
 
 def _repair_empty_selector() -> bool:
-    """Пустой LagomVPN → missing tags. Ноды не трогаем."""
+    """Пустой proxy-select → missing tags. Ноды не трогаем."""
     path = DEST / "config.json"
     try:
         cfg = json.loads(path.read_text(encoding="utf-8"))
@@ -248,7 +254,7 @@ def _repair_empty_selector() -> bool:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)
-    _log("починил пустой селектор LagomVPN — ноды на месте")
+    _log("починил пустой селектор proxy-select — ноды на месте")
     return True
 
 
@@ -262,9 +268,11 @@ def _seed_ai_suffixes(path: Path) -> None:
         return
     if not isinstance(cfg, dict):
         return
-    before = nodes.lagom_suffixes(cfg)
-    nodes.apply_lagom_suffixes(cfg, before)
-    if nodes.lagom_suffixes(cfg) == before:
+    if not nodes.proxy_suffixes(cfg):
+        return
+    before = copy.deepcopy(cfg)
+    nodes.apply_proxy_suffixes(cfg, nodes.proxy_suffixes(cfg))
+    if cfg == before:
         return
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
@@ -293,9 +301,9 @@ def _configure_warp() -> None:
         raise OSError("WARP служба не отвечает")
     if not warp.ensure_registration():
         raise OSError("WARP registration new не прошёл")
-    warp.configure_and_connect()
-    if not warp.wait_ready(tries=5):
-        _log("WARP :40000 ещё молчит — дожмёт Eblit")
+    warp.configure()
+    if not warp.disconnect():
+        raise OSError("WARP не отключился после настройки")
 
 
 def _register_uninstall() -> None:

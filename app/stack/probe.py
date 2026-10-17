@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+
 from app.stack import health, singbox, warp
 from app.stack.httpchk import has_http, http_line
 from app.stack.run import hidden
@@ -14,7 +16,10 @@ def _curl(url: str, *, socks: str | None = None, connect: int = 8, max_time: int
     args = ["curl.exe", "-4", "-sI", "--connect-timeout", str(connect), "--max-time", str(max_time)]
     if socks:
         args[2:2] = ["--socks5-hostname", socks]
-    r = hidden(args + [url], timeout=max_time + 4)
+    try:
+        r = hidden(args + [url], timeout=max_time + 4)
+    except subprocess.TimeoutExpired:
+        return False, "timeout"
     line = http_line(r.stdout)
     return has_http(r.stdout), line or "нет HTTP"
 
@@ -33,9 +38,18 @@ def bad_leg_name(legs: dict) -> str | None:
 
 
 def full_test(*, power_on: bool) -> dict:
-    warp_ok, warp_why = _curl(
-        "https://open.spotify.com", socks=warp.SOCKS, connect=8, max_time=10
-    )
+    if not power_on:
+        off = _leg("off", "питание выключено")
+        return {
+            "ok": True,
+            "power": False,
+            "legs": {"box": off, "warp": off, "node": off},
+            "detail": health.last_result_line(),
+        }
+
+    warp_status = warp.proxy_probe()
+    warp_ok = warp_status["ok"]
+    warp_why = warp_status["why"]
     tun_ok, tun_why = _curl("https://open.spotify.com", connect=10, max_time=15)
     ff_ok, _ff = _curl(FIREFOX, connect=8, max_time=10)
     tun_if = singbox.adapter()
@@ -43,16 +57,6 @@ def full_test(*, power_on: bool) -> dict:
     cur_ok, _cur = _curl(CURSOR, socks=MIXED, connect=15, max_time=20)
     last = health.last_result_line()
     proc = singbox.running()
-
-    if not power_on:
-        off = _leg("off", "питание выключено")
-        return {
-            "ok": True,
-            "power": False,
-            "legs": {"box": off, "warp": off, "node": off},
-            "detail": last,
-        }
-
     box_ok = proc and tun_if
     box_why = (
         "sing-box и tun-fastly"
@@ -64,7 +68,7 @@ def full_test(*, power_on: bool) -> dict:
         "power": True,
         "legs": {
             "box": _leg("ok" if box_ok else "bad", box_why),
-            "warp": _leg("ok" if warp_ok else "bad", "WARP :40000" if warp_ok else f"WARP :40000 {warp_why}"),
+            "warp": _leg("ok" if warp_ok else "bad", warp_why),
             "node": _leg("ok" if grok_ok else "bad", "сервер отвечает" if grok_ok else f"сервер {grok_why}"),
         },
         "smoke": {
@@ -87,7 +91,8 @@ def light_tick(*, power_on: bool) -> dict:
 
     proc = singbox.running()
     tun_if = singbox.adapter()
-    warp_ok = warp.socks_ok()
+    warp_status = warp.proxy_probe()
+    warp_ok = warp_status["ok"]
     grok_ok, grok_why = _curl(GROK, socks=MIXED, connect=8, max_time=10)
     box_ok = proc and tun_if
     return {
@@ -98,7 +103,7 @@ def light_tick(*, power_on: bool) -> dict:
                 "ok" if box_ok else "bad",
                 "sing-box и tun-fastly" if box_ok else ("нет tun-fastly" if not tun_if else "sing-box не запущен"),
             ),
-            "warp": _leg("ok" if warp_ok else "bad", "WARP :40000" if warp_ok else "WARP :40000 молчит"),
+            "warp": _leg("ok" if warp_ok else "bad", warp_status["why"]),
             "node": _leg("ok" if grok_ok else "bad", "сервер отвечает" if grok_ok else f"сервер {grok_why}"),
         },
     }

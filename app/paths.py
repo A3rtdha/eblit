@@ -3,20 +3,22 @@
 from __future__ import annotations
 
 import os
-import shutil
 import sys
 from pathlib import Path
 
+from app.storage import atomic_write
+
 _DATA_FILES = (
     "config.json",
-    "lagom-nodes.json",
-    "lagom-ips.json",
-    "lagom-pick.json",
-    "lagom-favorite.json",
-    "lagom-probe.json",
-    "lagom-sub.json",
+    "eblit-nodes.json",
+    "eblit-ips.json",
+    "eblit-pick.json",
+    "eblit-favorite.json",
+    "eblit-probe.json",
+    "eblit-sub.json",
     "eblit-power.json",
     "eblit-first.json",
+    "eblit-warp.json",
     "split-ui.log",
     "health.log",
     "sing-box.log",
@@ -35,17 +37,6 @@ def root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def _writable(path: Path) -> bool:
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-        probe = path / ".write-probe"
-        probe.write_text("", encoding="utf-8")
-        probe.unlink(missing_ok=True)
-        return True
-    except OSError:
-        return False
-
-
 def _migrate(install: Path, data: Path) -> None:
     if (data / _MIGRATE_STAMP).is_file():
         return
@@ -54,28 +45,41 @@ def _migrate(install: Path, data: Path) -> None:
         src = install / name
         dst = data / name
         if src.is_file() and not dst.is_file():
-            shutil.copy2(src, dst)
-    if install.is_dir():
-        for src in install.glob("_probe*.json"):
-            dst = data / src.name
-            if src.is_file() and not dst.is_file():
-                shutil.copy2(src, dst)
-    (data / _MIGRATE_STAMP).write_text(str(install), encoding="utf-8")
+            atomic_write(dst, src.read_text(encoding="utf-8"))
+    atomic_write(data / _MIGRATE_STAMP, str(install))
+
+
+def _migrate_names(data: Path) -> None:
+    stamp = data / ".legacy-names-v2"
+    if stamp.is_file():
+        return
+    for suffix in ("nodes", "ips", "pick", "favorite", "probe", "sub"):
+        old = data / f"lagom-{suffix}.json"
+        new = data / f"eblit-{suffix}.json"
+        if old.is_file() and not new.exists():
+            atomic_write(new, old.read_text(encoding="utf-8"))
+    atomic_write(stamp, "2\n")
 
 
 def data_root() -> Path:
-    """Config and sidecars. Repo root in dev; AppData when Program Files is read-only."""
+    """Use the same user directory before and after elevation."""
     global _data_root
     if not frozen():
+        _migrate_names(root())
         return root()
     if _data_root is not None:
         return _data_root
     install = root()
-    if _writable(install):
-        _data_root = install
-        return _data_root
     local = Path(os.environ.get("LOCALAPPDATA", "")) / "Eblit"
+    if not (local / "config.json").is_file() and not (install / "config.json").is_file():
+        local.mkdir(parents=True, exist_ok=True)
+        _data_root = local
+        return local
     _migrate(install, local)
+    for old in install.glob("lagom-*.json"):
+        if not (local / old.name).exists():
+            atomic_write(local / old.name, old.read_text(encoding="utf-8"))
+    _migrate_names(local)
     _data_root = local
     return _data_root
 

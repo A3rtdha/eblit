@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
+from pathlib import Path
 
 from .log import write
 from .paths import web_index
@@ -32,6 +33,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"нет UI: {page}", file=sys.stderr)
         return 1
 
+    from .instance import application_instance
+
+    with application_instance() as primary:
+        if not primary:
+            from .tray import show_existing_window
+
+            show_existing_window()
+            return 0
+        return _run_window(page)
+
+
+def _run_window(page: Path) -> int:
     import webview
 
     from .bridge import Bridge
@@ -60,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         js_api=bridge,
     )
     bridge.set_window(window)
+    window.events.closing += bridge.on_closing
     tray = start_tray()
     if tray is not None:
         # pystray.notify(message, title) — полноценный балун Windows из трея.
@@ -67,6 +81,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         webview.start(gui="edgechromium")
     finally:
+        result = bridge.shutdown()
+        if not result.get("ok"):
+            write("shutdown: сетевой стек не остановлен")
         if tray is not None:
             try:
                 tray.stop()

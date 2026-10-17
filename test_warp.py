@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from app.stack import warp
 
@@ -195,6 +195,11 @@ class OpenGui(unittest.TestCase):
 
 
 class SocksOk(unittest.TestCase):
+    def setUp(self):
+        probe = patch.object(warp, "_socks_error", return_value=None)
+        probe.start()
+        self.addCleanup(probe.stop)
+
     def test_timeout_is_not_ready(self):
         with patch.object(
             warp, "hidden", side_effect=subprocess.TimeoutExpired(["curl.exe"], 8)
@@ -223,6 +228,64 @@ class WaitReady(unittest.TestCase):
             self.assertFalse(warp.wait_ready(tries=3))
         self.assertEqual(socks.call_count, 3)
         self.assertEqual(sleep.call_count, 3)
+
+
+class ProxyDiagnostics(unittest.TestCase):
+    def test_refused_tcp_port_is_reported_as_port_failure(self):
+        with patch.object(warp.socket, "create_connection", side_effect=ConnectionRefusedError()):
+            result = warp.proxy_probe()
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["ready"])
+        self.assertIn("TCP", result["why"])
+
+    def test_silent_socks_server_is_different_from_closed_tcp_port(self):
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        connection.recv.side_effect = TimeoutError()
+        with patch.object(warp.socket, "create_connection", return_value=connection):
+            result = warp.proxy_probe()
+        self.assertFalse(result["ready"])
+        self.assertIn("TCP :40000 открыт", result["why"])
+
+    def test_partial_socks_greeting_is_read_completely(self):
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        connection.recv.side_effect = [b"\x05", b"\x00"]
+        with patch.object(warp.socket, "create_connection", return_value=connection):
+            self.assertIsNone(warp._socks_error())
+        connection.sendall.assert_called_once_with(b"\x05\x01\x00")
+
+    def test_unavailable_spotify_does_not_mean_warp_proxy_is_dead(self):
+        with (
+            patch.object(warp, "_socks_error", return_value=None),
+            patch.object(warp, "_https_probe", side_effect=[(False, "таймаут HTTPS"), (True, "")]) as request,
+        ):
+            result = warp.proxy_probe()
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["ready"])
+        self.assertIn("Spotify", result["why"])
+        self.assertEqual([call.args[0] for call in request.call_args_list], [warp.SPOTIFY, warp.CONTROL_URL])
+
+    def test_upstream_failure_does_not_claim_port_is_silent(self):
+        with (
+            patch.object(warp, "_socks_error", return_value=None),
+            patch.object(warp, "_https_probe", return_value=(False, "таймаут HTTPS")),
+        ):
+            result = warp.proxy_probe()
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["ready"])
+        self.assertIn("SOCKS5 :40000 отвечает", result["why"])
+        self.assertIn("таймаут HTTPS", result["why"])
+
+    def test_tls_failure_keeps_certificate_verification_enabled(self):
+        with patch.object(warp, "hidden", return_value=proc([], 60)) as request:
+            ok, why = warp._https_probe(warp.SPOTIFY)
+        self.assertFalse(ok)
+        self.assertIn("TLS", why)
+        self.assertNotIn("--insecure", request.call_args.args[0])
+        self.assertNotIn("--ssl-no-revoke", request.call_args.args[0])
 
 
 if __name__ == "__main__":

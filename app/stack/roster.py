@@ -9,7 +9,7 @@ from pathlib import Path
 import app.paths as paths
 from app.stack import nodes
 
-SELECTOR = "LagomVPN"
+SELECTOR = nodes.SELECTOR
 
 
 def _read_json(path: Path, tries: int = 3) -> tuple[object | None, str]:
@@ -38,14 +38,14 @@ def _selected(outbounds: list) -> str | None:
 
 
 def _ip_to_host() -> dict[str, str]:
-    data, _why = _read_json(paths.data_root() / "lagom-ips.json", tries=1)
+    data, _why = _read_json(paths.data_root() / "eblit-ips.json", tries=1)
     if not isinstance(data, dict):
         return {}
     return {str(ip): str(host) for host, ip in data.items() if isinstance(ip, str)}
 
 
 def _pick() -> dict | None:
-    data, _why = _read_json(paths.data_root() / "lagom-pick.json", tries=1)
+    data, _why = _read_json(paths.data_root() / "eblit-pick.json", tries=1)
     if not isinstance(data, dict):
         return None
     tag, ip = data.get("tag"), data.get("ip")
@@ -58,7 +58,7 @@ def _pick() -> dict | None:
 
 
 def _favorite() -> str | None:
-    data, _why = _read_json(paths.data_root() / "lagom-favorite.json", tries=1)
+    data, _why = _read_json(paths.data_root() / "eblit-favorite.json", tries=1)
     if not isinstance(data, dict):
         return None
     tag = data.get("tag")
@@ -83,9 +83,10 @@ def stack_nodes() -> dict:
         "manual": False,
         "auto": True,
     }
-    cfg, why = _read_json(paths.data_root() / "config.json")
-    if not isinstance(cfg, dict):
-        return {**empty, "why": why or "config.json битый"}
+    try:
+        cfg = nodes.read_config()
+    except (OSError, ValueError) as exc:
+        return {**empty, "why": str(exc)}
     outbounds = cfg.get("outbounds")
     if not isinstance(outbounds, list):
         return {**empty, "why": "в config.json нет outbounds"}

@@ -1,19 +1,25 @@
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
+import threading
 import time
 from pathlib import Path
 
 from app.log import write
+from app.paths import data_root
 from app.stack.httpchk import has_http
 from app.stack.run import hidden
+from app.storage import atomic_write
 
 SOCKS = "127.0.0.1:40000"
 SPOTIFY = "https://open.spotify.com"
+CONTROL_URL = "https://cp.cloudflare.com/generate_204"
 WAIT_TRIES = 30
 _SERVICES = ("CloudflareWARP", "warp-svc")
 GUI_NAME = "Cloudflare WARP.exe"
+_PROBE_LOCK = threading.Lock()
 
 
 def _program_files_cli() -> Path:
@@ -102,16 +108,22 @@ def wait_daemon(tries: int = 30) -> bool:
 
 def configure() -> None:
     # Смена mode, пока туннель жив, у WARP часто no-op / error — SOCKS так и не слушает :40000.
-    _ok("disconnect")
+    if not _ok("disconnect"):
+        raise OSError("WARP: не удалось отключить прежнее соединение")
     _first(("tunnel", "protocol", "set", "MASQUE"), ("set-tunnel-protocol", "MASQUE"))
-    _first(("mode", "proxy"), ("set-mode", "proxy"))
-    _first(("proxy", "port", "40000"), ("set-proxy-port", "40000"))
+    if not _first(("mode", "proxy"), ("set-mode", "proxy")):
+        raise OSError("WARP: не удалось включить режим прокси")
+    if not _first(("proxy", "port", "40000"), ("set-proxy-port", "40000")):
+        raise OSError("WARP: не удалось настроить порт прокси")
 
 
 def configure_and_connect() -> None:
-    ensure_registration()
+    atomic_write(data_root() / "eblit-warp.json", "{}\n")
+    if not ensure_registration():
+        raise OSError("WARP: регистрация не прошла")
     configure()
-    _ok("connect")
+    if not _ok("connect"):
+        raise OSError("WARP: подключение не прошло")
 
 
 def registered() -> bool:
@@ -135,8 +147,15 @@ def ensure_registration() -> bool:
     return _ok("register", timeout=60) or registered()
 
 
-def disconnect() -> None:
-    _ok("disconnect")
+def owned() -> bool:
+    return (data_root() / "eblit-warp.json").is_file()
+
+
+def disconnect() -> bool:
+    if not _ok("disconnect"):
+        return False
+    (data_root() / "eblit-warp.json").unlink(missing_ok=True)
+    return True
 
 
 def reset_mode() -> None:
@@ -145,32 +164,77 @@ def reset_mode() -> None:
     _first(("mode", "warp"), ("set-mode", "warp"))
 
 
-def socks_ok() -> bool:
-    """False, если :40000 молчит. Таймаут curl — не исключение: сетап и тик ждут ретрай."""
+def _socks_error() -> str | None:
     try:
-        r = hidden(
+        connection = socket.create_connection(("127.0.0.1", 40000), timeout=2)
+    except OSError:
+        return "Нет TCP-соединения с WARP :40000"
+    with connection:
+        try:
+            connection.sendall(b"\x05\x01\x00")
+            greeting = b""
+            while len(greeting) < 2:
+                chunk = connection.recv(2 - len(greeting))
+                if not chunk:
+                    break
+                greeting += chunk
+        except OSError:
+            return "TCP :40000 открыт, но SOCKS5 не отвечает"
+    if greeting != b"\x05\x00":
+        return "Порт :40000 не подтвердил SOCKS5 без авторизации"
+    return None
+
+
+def _https_probe(url: str) -> tuple[bool, str]:
+    try:
+        result = hidden(
             [
-                "curl.exe",
-                "-4",
-                "--socks5-hostname",
-                SOCKS,
-                "-sI",
-                "--connect-timeout",
-                "3",
-                "--max-time",
-                "7",
-                SPOTIFY,
+                "curl.exe", "-q", "-4", "--socks5-hostname", SOCKS,
+                "--noproxy", "", "-sSI", "--connect-timeout", "3", "--max-time", "7", url,
             ],
             timeout=8,
         )
     except subprocess.TimeoutExpired:
-        return False
-    return has_http(r.stdout)
+        return False, "таймаут HTTPS"
+    if result.returncode == 0 and has_http(result.stdout):
+        return True, ""
+    if result.returncode == 28:
+        return False, "таймаут HTTPS"
+    if result.returncode in (35, 60):
+        return False, "ошибка TLS"
+    if result.returncode == 97:
+        return False, "SOCKS5 не подключился к сайту"
+    return False, f"HTTPS не ответил (curl {result.returncode})"
+
+
+def proxy_probe() -> dict:
+    with _PROBE_LOCK:
+        error = _socks_error()
+        if error:
+            return {"ok": False, "ready": False, "why": error}
+        spotify_ok, spotify_error = _https_probe(SPOTIFY)
+        if spotify_ok:
+            return {"ok": True, "ready": True, "why": "WARP :40000: SOCKS5 и HTTPS отвечают"}
+        control_ok, control_error = _https_probe(CONTROL_URL)
+        if control_ok:
+            return {"ok": True, "ready": True, "why": f"WARP работает; Spotify: {spotify_error}; контрольный сайт доступен"}
+        return {
+            "ok": False,
+            "ready": True,
+            "why": f"SOCKS5 :40000 отвечает; Spotify: {spotify_error}; Cloudflare: {control_error}",
+        }
+
+
+def socks_ok() -> bool:
+    return bool(proxy_probe()["ok"])
 
 
 def wait_ready(tries: int = WAIT_TRIES) -> bool:
+    deadline = time.monotonic() + 45
     for _ in range(max(1, int(tries))):
         if socks_ok():
             return True
+        if time.monotonic() >= deadline:
+            break
         time.sleep(2)
     return False

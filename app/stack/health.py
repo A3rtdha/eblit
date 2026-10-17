@@ -1,4 +1,4 @@
-"""Pick the first Lagom geo that answers Reality. Do not scan the rest."""
+"""Pick the first VLESS geo that answers Reality. Do not scan the rest."""
 
 from __future__ import annotations
 
@@ -31,15 +31,15 @@ def _cfg() -> Path:
 
 
 def _ips() -> Path:
-    return _dir() / "lagom-ips.json"
+    return _dir() / "eblit-ips.json"
 
 
 def _pick() -> Path:
-    return _dir() / "lagom-pick.json"
+    return _dir() / "eblit-pick.json"
 
 
 def _fav() -> Path:
-    return _dir() / "lagom-favorite.json"
+    return _dir() / "eblit-favorite.json"
 
 
 def _log() -> Path:
@@ -52,6 +52,27 @@ SCAN_WORKERS = 4
 CURL_TIMEOUT = 8
 RESOLVE_TIMEOUT = 2.0
 SCAN_BUDGET = 40.0
+_PROBE_LOCK = threading.Lock()
+_PROCESSES: set[subprocess.Popen] = set()
+_CANCELLED = threading.Event()
+
+
+def resume_probes() -> None:
+    _CANCELLED.clear()
+
+
+def cancel_probes() -> None:
+    with _PROBE_LOCK:
+        _CANCELLED.set()
+        processes = list(_PROCESSES)
+    for process in processes:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
 
 
 def log(line: str) -> None:
@@ -82,7 +103,7 @@ def resolve_one(host: str, timeout: float = RESOLVE_TIMEOUT) -> str | None:
         except OSError:
             box.append(None)
 
-    # ponytail: getaddrinfo не умеет timeout; поток-демон доживёт DNS сам.
+    # getaddrinfo не умеет timeout; поток-демон доживёт DNS сам.
     worker = threading.Thread(target=lookup, name="eblit-dns", daemon=True)
     worker.start()
     worker.join(timeout)
@@ -109,14 +130,19 @@ def probe(
         "outbounds": [ob, {"type": "direct", "tag": "direct"}],
         "route": {"final": tag, "auto_detect_interface": True},
     }
-    path.write_text(json.dumps(cfg), encoding="utf-8")
-    proc = subprocess.Popen(
-        [str(singbox()), "run", "-c", str(path)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=CREATE_NO_WINDOW,
-    )
+    proc = None
     try:
+        with _PROBE_LOCK:
+            if _CANCELLED.is_set():
+                raise OSError("проверка отменена")
+            nodes._atomic_write(path, json.dumps(cfg))
+            proc = subprocess.Popen(
+                [str(singbox()), "run", "-c", str(path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            _PROCESSES.add(proc)
         time.sleep(0.6)
         t0 = time.perf_counter()
         try:
@@ -147,15 +173,15 @@ def probe(
         line = next((ln for ln in r.stdout.splitlines() if ln.startswith("HTTP/")), "")
         return False, ms, status_code(r.stdout) or line or "timeout"
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        if proc is not None:
+            proc.terminate()
             try:
                 proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                pass
+                proc.kill()
+                proc.wait(timeout=2)
+            with _PROBE_LOCK:
+                _PROCESSES.discard(proc)
         path.unlink(missing_ok=True)
 
 
@@ -194,7 +220,7 @@ def favorite_tag() -> str | None:
 
 
 def try_order(cfg: dict | None = None) -> list[str]:
-    data = cfg if cfg is not None else json.loads(_cfg().read_text(encoding="utf-8"))
+    data = cfg if cfg is not None else nodes.read_config()
     tags = nodes.vless_tags(data)
     order: list[str] = []
     fav = favorite_tag()
@@ -221,7 +247,6 @@ def _ip_for_tag(tag: str, outbound: dict, host_map: dict[str, str], pins: dict[s
             ip = None
         if ip:
             pins[host] = ip
-            outbound["server"] = ip
             return ip
     server = outbound.get("server")
     if isinstance(server, str) and server:
@@ -240,8 +265,8 @@ def last_result_line() -> str:
 
 
 def scan_all() -> dict:
-    """Пинг всех vless. Не first-live и не пишет selector / lagom-pick."""
-    cfg = json.loads(_cfg().read_text(encoding="utf-8"))
+    """Пинг всех vless. Не first-live и не пишет selector / eblit-pick."""
+    cfg = nodes.read_config()
     by_tag = {
         ob.get("tag"): ob
         for ob in cfg.get("outbounds", [])
@@ -288,7 +313,7 @@ def main() -> int:
     leftover = _dir() / "_probe.json"
     leftover.unlink(missing_ok=True)
 
-    cfg = json.loads(_cfg().read_text(encoding="utf-8"))
+    cfg = nodes.read_config()
     by_tag = {
         ob.get("tag"): ob
         for ob in cfg.get("outbounds", [])
@@ -300,14 +325,10 @@ def main() -> int:
 
     host_map = nodes.hosts()
     pins: dict[str, str] = {}
-    for tag in by_tag:
-        ip = _ip_for_tag(tag, by_tag[tag], host_map, pins)
-        if not ip:
-            log(f"{tag:12} SKIP no IP")
-
     log("health start (first live geo wins)")
     winner = None
     manual = nodes.manual_tag()
+    deadline = time.monotonic() + SCAN_BUDGET
     if manual and manual in by_tag:
         ip = _ip_for_tag(manual, by_tag[manual], host_map, pins)
         if ip:
@@ -320,9 +341,11 @@ def main() -> int:
 
     if not winner:
         for tag in try_order(cfg):
-            if tag not in by_tag:
+            if _CANCELLED.is_set() or time.monotonic() >= deadline:
+                break
+            if tag not in by_tag or tag == manual:
                 continue
-            ip = pins.get(host_map.get(tag, "")) or str(by_tag[tag].get("server") or "")
+            ip = _ip_for_tag(tag, by_tag[tag], host_map, pins)
             if not ip:
                 log(f"{tag:12} {'':15} SKIP no IP")
                 continue
@@ -332,31 +355,35 @@ def main() -> int:
                 winner = (tag, ip)
                 break
 
-    if not winner:
-        log("RESULT none — config IPs refreshed, LagomVPN unchanged")
-        tmp = _cfg().with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-        tmp.replace(_cfg())
-        _ips().write_text(json.dumps(pins, indent=2) + "\n", encoding="utf-8")
-        return 1
-
-    tag, ip = winner
-    for ob in cfg["outbounds"]:
-        if ob.get("tag") == "LagomVPN":
-            ob.clear()
-            ob.update({"type": "selector", "tag": "LagomVPN", "outbounds": [tag]})
-            break
-
-    manual_now = nodes.manual_tag()
-    pick_payload = {"tag": tag, "ip": ip}
-    if manual_now == tag:
-        pick_payload["manual"] = True
-
-    _ips().write_text(json.dumps(pins, indent=2) + "\n", encoding="utf-8")
-    _pick().write_text(json.dumps(pick_payload) + "\n", encoding="utf-8")
-    tmp = _cfg().with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(_cfg())
+    with nodes.configuration.locked():
+        current = nodes.read_config()
+        if winner:
+            original = by_tag[winner[0]]
+            candidate = next((ob for ob in current["outbounds"] if ob.get("tag") == winner[0]), None)
+            if candidate != original:
+                log("RESULT server changed during probe; retry")
+                return 1
+        for ob in current["outbounds"]:
+            original = by_tag.get(ob.get("tag"))
+            if original and ob == original:
+                host = host_map.get(ob["tag"], "")
+                if host in pins:
+                    ob["server"] = pins[host]
+        nodes._atomic_write(_ips(), json.dumps(pins, indent=2) + "\n")
+        if not winner:
+            nodes.write_config(current)
+            log("RESULT none — no live server")
+            return 1
+        tag, ip = winner
+        if tag not in nodes.vless_tags(current) or nodes.manual_tag() != manual:
+            log("RESULT selection changed during probe; retry")
+            return 1
+        nodes._set_selector(current, [tag])
+        pick_payload = {"tag": tag, "ip": ip}
+        if manual == tag:
+            pick_payload["manual"] = True
+        nodes.write_config(current)
+        nodes._atomic_write(_pick(), json.dumps(pick_payload) + "\n")
     log(f"RESULT pick={tag}:{ip} (stopped, rest not probed)")
     return 0
 

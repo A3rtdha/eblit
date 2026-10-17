@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+import subprocess
+
+from app.log import write
 from app.stack import admin, autostart, lifecycle, probe, teredo
 
 
 def run(cmd: str) -> int:
+    try:
+        return _run(cmd)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        write(f"{cmd}: {exc}")
+        return 1
+
+
+def _run(cmd: str) -> int:
     if cmd in {"start", "stop", "reload", "teredo"}:
         bounced = admin.ensure_admin(cmd)
         if bounced is not None:
@@ -14,7 +25,7 @@ def run(cmd: str) -> int:
         return 0 if result.get("ok") or result.get("power") else 1
     if cmd == "stop":
         result = lifecycle.stop()
-        return 1 if result.get("power") else 0
+        return 0 if result.get("ok") and not result.get("power") else 1
     if cmd == "reload":
         result = lifecycle.reload()
         return 0 if result.get("power") else 1

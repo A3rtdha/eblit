@@ -10,6 +10,7 @@ from __future__ import annotations
 import socket
 
 from app.log import write
+from app.stack.configuration import changing
 from app.stack.nodes import read_config, write_config
 from app.stack.run import hidden
 
@@ -67,6 +68,7 @@ def state() -> dict:
     return {"on": on, "port": port, "address": address() if on else ""}
 
 
+@changing
 def set_enabled(on: bool) -> dict:
     """Только config.json — как и правка доменов, тумблер не дёргает UAC.
     Файрвол догоняет на следующем старте / перезапуске подключения."""
@@ -104,9 +106,8 @@ def sync_firewall() -> None:
             "action=allow",
             "protocol=TCP",
             f"localport={port}",
-            # profile=any, а не private: Windows часто метит домашнюю сеть
-            # «Общественной», и правило на private молча не срабатывает.
-            "profile=any",
+            "profile=private",
+            "remoteip=localsubnet",
         ],
         timeout=15,
     )

@@ -1,11 +1,27 @@
 from __future__ import annotations
 
-import time
+from functools import wraps
 
 from app.log import write
 from app.stack import health, lan, probe, singbox, subscribe, warp
 
 
+def _rollback_on_error(fn):
+    @wraps(fn)
+    def run():
+        try:
+            return fn()
+        except Exception:
+            try:
+                stop()
+            except Exception as exc:
+                write(f"cleanup fail: {type(exc).__name__}")
+            raise
+
+    return run
+
+
+@_rollback_on_error
 def start() -> dict:
     write("подключение: старт")
     try:
@@ -18,7 +34,8 @@ def start() -> dict:
     except (OSError, ValueError, TypeError) as exc:
         write(f"домены: {exc}")
     singbox.kill()
-    time.sleep(2)
+    if not singbox.wait_gone():
+        raise OSError("sing-box не остановился")
     try:
         sub = subscribe.refresh()
         if not sub.get("ok") and not sub.get("skipped"):
@@ -30,21 +47,23 @@ def start() -> dict:
     ok, err = singbox.check()
     if not ok:
         write(f"config: {err}")
-        result = probe.full_test(power_on=False)
+        result = probe.light_tick(power_on=False)
         result.update({"ok": False, "power": False, "why": err})
         return result
     warp.configure_and_connect()
     if not warp.wait_ready():
-        write("WARP :40000 timeout")
+        write("WARP: не подтверждён доступ в интернет через :40000")
         warp.disconnect()
-        result = probe.full_test(power_on=False)
-        result.update({"ok": False, "power": False, "why": "WARP :40000 молчит"})
+        result = probe.light_tick(power_on=False)
+        result.update({"ok": False, "power": False, "why": "WARP: не подтверждён доступ в интернет через :40000"})
         return result
     lan.sync_firewall()
     singbox.start()
     if not singbox.wait_tun():
-        write("TUN Spotify timeout — проверка всё равно")
-    result = probe.full_test(power_on=True)
+        result = stop()
+        result.update({"ok": False, "why": "TUN не готов — подключение остановлено"})
+        return result
+    result = probe.light_tick(power_on=True)
     result["ok"] = bool(result.get("ok"))
     result["power"] = True
     write("подключение: старт готов")
@@ -59,10 +78,15 @@ def stop() -> dict:
         result = probe.light_tick(power_on=True)
         result.update({"ok": False, "power": True, "why": "sing-box не остановился"})
         return result
-    warp.disconnect()
-    return {"ok": True, "power": False, **probe.light_tick(power_on=False)}
+    disconnected = warp.disconnect()
+    result = probe.light_tick(power_on=False)
+    result.update({"ok": bool(disconnected), "power": False})
+    if not disconnected:
+        result["why"] = "WARP не отключился"
+    return result
 
 
+@_rollback_on_error
 def reload() -> dict:
     write("подключение: перезапуск")
     try:
@@ -82,12 +106,15 @@ def reload() -> dict:
         result.update({"ok": False, "power": on, "why": err})
         return result
     singbox.kill()
-    time.sleep(2)
+    if not singbox.wait_gone():
+        raise OSError("sing-box не остановился")
     lan.sync_firewall()
     singbox.start()
     if not singbox.wait_tun():
-        write("TUN Spotify timeout — проверка всё равно")
-    result = probe.full_test(power_on=True)
+        result = stop()
+        result.update({"ok": False, "why": "TUN не готов — подключение остановлено"})
+        return result
+    result = probe.light_tick(power_on=True)
     result["power"] = True
     write("подключение: перезапуск готов")
     return result

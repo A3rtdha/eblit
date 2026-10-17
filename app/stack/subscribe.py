@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import app.paths as paths
 from app.stack import nodes
 
-SUB_FILE = "lagom-sub.json"
+SUB_FILE = "eblit-sub.json"
 UA_HAPP = "Happ/1.0"
 UA_V2RAYN = "v2rayN/1.8.23"
 MAX_BODY = 2_000_000
@@ -46,10 +46,7 @@ def _path():
 
 
 def _write_pref(url: str, tags: list[str]) -> None:
-    path = _path()
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps({"url": url, "tags": list(tags)}) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    nodes._atomic_write(_path(), json.dumps({"url": url, "tags": list(tags)}) + "\n")
 
 
 def get() -> dict:
@@ -59,9 +56,9 @@ def get() -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        return {"ok": False, "url": "", "tags": [], "why": "битый lagom-sub.json"}
+        return {"ok": False, "url": "", "tags": [], "why": "битый eblit-sub.json"}
     if not isinstance(data, dict):
-        return {"ok": False, "url": "", "tags": [], "why": "битый lagom-sub.json"}
+        return {"ok": False, "url": "", "tags": [], "why": "битый eblit-sub.json"}
     url = data.get("url")
     url = url.strip() if isinstance(url, str) else ""
     tags: list[str] = []
@@ -71,6 +68,7 @@ def get() -> dict:
     return {"ok": True, "url": url, "tags": tags}
 
 
+@nodes.configuration.changing
 def set_url(url) -> dict:
     raw = str(url or "").strip()
     current = get()
@@ -684,9 +682,7 @@ def _remap_sidecar_tags(renames: dict[str, str]) -> None:
         if not isinstance(tag, str) or tag not in renames:
             continue
         data["tag"] = renames[tag]
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data) + "\n", encoding="utf-8")
-        tmp.replace(path)
+        nodes._atomic_write(path, json.dumps(data) + "\n")
 
 
 def _roster_fail(why: str) -> dict:
@@ -695,6 +691,7 @@ def _roster_fail(why: str) -> dict:
     return {**roster.stack_nodes(), "ok": False, "why": why}
 
 
+@nodes.configuration.changing
 def sync(parsed_nodes: list[dict]) -> dict:
     from app.stack import roster
 
@@ -722,6 +719,7 @@ def sync(parsed_nodes: list[dict]) -> dict:
     manuals = [ob for ob in existing_vless if ob["tag"] not in owned_set]
     manual_ids = {_identity_ob(ob, hosts_map) for ob in manuals}
     taken = {ob["tag"] for ob in manuals}
+    taken.update(ob["tag"] for ob in others if isinstance(ob, dict) and isinstance(ob.get("tag"), str))
     new_owned: list[dict] = []
     new_owned_tags: list[str] = []
     seen_ids: set[tuple[str, str, int]] = set()
@@ -793,4 +791,7 @@ def refresh() -> dict:
                     parsed = again
         if not parsed.get("nodes"):
             return _roster_fail(parsed.get("why") or "в подписке нет пригодного vless")
-        return sync(parsed["nodes"])
+        with nodes.configuration.locked():
+            if get().get("url") != url:
+                return _roster_fail("ссылка подписки изменилась — обновите список ещё раз")
+            return sync(parsed["nodes"])

@@ -37,3 +37,10 @@ _shot*
 *.bak
 .DS_Store
 Thumbs.db
+
+eblit-*.json
+*.json.lock
+*.tmp
+
+.legacy-names-v2
+.data-root-v1

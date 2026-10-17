@@ -24,7 +24,7 @@ NODE_PARSED = {
 
 BASE_CFG = {
     "outbounds": [
-        {"type": "selector", "tag": "LagomVPN", "outbounds": ["Sweden"]},
+        {"type": "selector", "tag": "proxy-select", "outbounds": ["Sweden"]},
         {
             "type": "vless",
             "tag": "Sweden",
@@ -41,7 +41,7 @@ BASE_CFG = {
         {"type": "direct", "tag": "direct"},
     ],
     "route": {
-        "rules": [{"domain_suffix": ["grok.com"], "outbound": "LagomVPN"}],
+        "rules": [{"domain_suffix": ["grok.com"], "outbound": "proxy-select"}],
         "final": "direct",
     },
     "dns": {"servers": [], "rules": [], "final": "google"},
@@ -124,14 +124,14 @@ class NodesIO(unittest.TestCase):
         nodes.select("Mars")
         nodes.remove("Mars")
         cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
-        selector = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "LagomVPN")
+        selector = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "proxy-select")
         self.assertEqual(selector["outbounds"], ["Sweden"])
 
-    def test_remove_last_leaves_empty_selector(self):
+    def test_remove_last_falls_back_to_direct(self):
         nodes.remove("Sweden")
         cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
-        selector = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "LagomVPN")
-        self.assertEqual(selector["outbounds"], [])
+        selector = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "proxy-select")
+        self.assertEqual(selector["outbounds"], ["direct"])
 
     def test_select_manual_writes_pick(self):
         nodes.select("Sweden")
@@ -139,14 +139,14 @@ class NodesIO(unittest.TestCase):
         self.assertTrue(pick["manual"])
         self.assertEqual(pick["tag"], "Sweden")
         cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
-        selector = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "LagomVPN")
+        selector = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "proxy-select")
         self.assertEqual(selector["outbounds"], ["Sweden"])
 
     def test_set_favorite_does_not_touch_selector(self):
-        """Избранное — только lagom-favorite.json, без selector и без pick."""
+        """Избранное — только eblit-favorite.json, без selector и без pick."""
         nodes.set_favorite("Sweden")
         cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
-        selector = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "LagomVPN")
+        selector = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "proxy-select")
         self.assertEqual(selector["outbounds"], ["Sweden"])
         self.assertFalse((self.dir / nodes.PICK_FILE).is_file())
         fav = json.loads((self.dir / nodes.FAV_FILE).read_text(encoding="utf-8"))
@@ -155,7 +155,7 @@ class NodesIO(unittest.TestCase):
     def test_set_links_updates_route_and_dns(self):
         nodes.set_links(["grok.com", "x.ai"])
         cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
-        suffixes = nodes.lagom_suffixes(cfg)
+        suffixes = nodes.proxy_suffixes(cfg)
         self.assertEqual(suffixes[:2], ["grok.com", "x.ai"])
         self.assertIn("aistudio.google.com", suffixes)
         self.assertIn("alkalimakersuite-pa.clients6.google.com", suffixes)
@@ -182,13 +182,44 @@ class NodesIO(unittest.TestCase):
         self.assertEqual(rules[0]["domain_suffix"], ["grok.com"])
         tg = next(r for r in rules if r.get("ip_cidr"))
         self.assertEqual(tg["ip_cidr"], nodes.TELEGRAM_CIDRS)
-        self.assertEqual(tg["outbound"], "LagomVPN")
+        self.assertEqual(tg["outbound"], "proxy-select")
         self.assertFalse(nodes.ensure_telegram_cidrs_file())
+
+    def test_proxy_domains_take_priority_over_warp_ip_ranges(self):
+        cfg = {
+            "route": {"rules": [
+                {"action": "sniff"},
+                {"ip_cidr": ["151.101.0.0/16"], "outbound": "warp"},
+                {"domain_suffix": ["chatgpt.com"], "network": "udp", "action": "reject"},
+                {"domain_suffix": ["chatgpt.com", "openai.com"], "outbound": "proxy-select"},
+            ]},
+        }
+        nodes.apply_proxy_suffixes(cfg, ["chatgpt.com", "openai.com"])
+        rules = cfg["route"]["rules"]
+        self.assertEqual(rules[0]["action"], "sniff")
+        self.assertEqual(rules[1]["action"], "reject")
+        self.assertEqual(rules[2]["outbound"], "proxy-select")
+        self.assertEqual(rules[3]["outbound"], "warp")
+        self.assertIn("openai.com", rules[2]["domain_suffix"])
+        self.assertFalse(any(rule.get("outbound") == "direct" for rule in rules))
+        before = json.dumps(cfg)
+        nodes.apply_proxy_suffixes(cfg, nodes.proxy_suffixes(cfg))
+        self.assertEqual(json.dumps(cfg), before)
+
+    def test_domain_update_does_not_add_domain_condition_to_telegram_rule(self):
+        telegram = {"ip_cidr": list(nodes.TELEGRAM_CIDRS), "outbound": "proxy-select"}
+        cfg = {"route": {"rules": [
+            telegram,
+            {"domain_suffix": ["chatgpt.com"], "outbound": "proxy-select"},
+        ]}}
+        nodes.apply_proxy_suffixes(cfg, ["chatgpt.com", "openai.com"])
+        self.assertNotIn("domain_suffix", telegram)
+        self.assertIn("openai.com", nodes.proxy_suffixes(cfg))
 
     def test_telegram_cidrs_fill_partial_rule_without_tun(self):
         cfg = json.loads(self.cfg.read_text(encoding="utf-8"))
         cfg["route"]["rules"].append(
-            {"ip_cidr": ["149.154.160.0/20"], "outbound": "LagomVPN"}
+            {"ip_cidr": ["149.154.160.0/20"], "outbound": "proxy-select"}
         )
         self.cfg.write_text(json.dumps(cfg), encoding="utf-8")
         self.assertTrue(nodes.ensure_telegram_cidrs_file())

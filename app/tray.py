@@ -7,9 +7,12 @@ pywebview/js_api must not be touched from the tray thread.
 from __future__ import annotations
 
 import ctypes
+import os
+import sys
 import threading
 from ctypes import wintypes
 
+import psutil
 import pystray
 
 from .icon import make_icon
@@ -70,6 +73,21 @@ def show_window() -> None:
     user32.SetForegroundWindow(hwnd)
 
 
+def show_existing_window() -> None:
+    expected = os.path.normcase(sys.executable)
+    for hwnd in _enum_top_windows():
+        if _window_title(hwnd) != TITLE:
+            continue
+        try:
+            executable = psutil.Process(_window_pid(hwnd)).exe()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        if os.path.normcase(executable) == expected:
+            user32.ShowWindow(hwnd, SW_RESTORE)
+            user32.SetForegroundWindow(hwnd)
+            return
+
+
 def close_window() -> None:
     hwnd = own_hwnd()
     if hwnd:
@@ -78,12 +96,8 @@ def close_window() -> None:
 
 def start_tray():
     """Иконка в трее отдельным потоком. Вернёт None, если трей не поднялся — окно живёт дальше."""
-    icon = {"ref": None}
-
     def quit_all(*_args) -> None:
         close_window()
-        if icon["ref"] is not None:
-            icon["ref"].stop()
 
     def run(tray) -> None:
         try:
@@ -102,6 +116,5 @@ def start_tray():
         write(f"tray: {exc}")
         return None
 
-    icon["ref"] = tray
     threading.Thread(target=run, args=(tray,), name="eblit-tray", daemon=True).start()
     return tray

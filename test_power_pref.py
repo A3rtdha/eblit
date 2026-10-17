@@ -105,7 +105,7 @@ class BridgePowerPersist(unittest.TestCase):
             patch("app.bridge.admin.is_admin", return_value=False),
             patch("app.bridge.admin.elevated", return_value=(True, 0)),
             patch("app.bridge.singbox.running", side_effect=running),
-            patch("app.bridge.probe.full_test", return_value=dict(ON)),
+            patch("app.bridge.probe.light_tick", return_value=dict(ON)),
             patch("app.bridge.time.sleep"),
         ):
             result = Bridge()._start()
@@ -117,7 +117,7 @@ class BridgePowerPersist(unittest.TestCase):
         with (
             patch("app.bridge.admin.is_admin", return_value=False),
             patch("app.bridge.admin.elevated", return_value=(False, 1)),
-            patch("app.bridge.probe.full_test", return_value=dict(OFF)),
+            patch("app.bridge.probe.light_tick", return_value=dict(OFF)),
             patch("app.bridge.singbox.running", return_value=False),
         ):
             result = Bridge()._start()
@@ -144,10 +144,12 @@ class BridgePowerPersist(unittest.TestCase):
         self.assertTrue(result["power"])
         self.assertTrue(power_pref.get()["on"])
 
-    def test_quit_does_not_touch_file(self):
+    def test_quit_remembers_manual_off(self):
         power_pref.set_on(True)
-        Bridge().quit()
-        self.assertTrue(power_pref.get()["on"])
+        bridge = Bridge()
+        with patch.object(bridge, "shutdown", return_value={"ok": True}):
+            bridge.quit()
+        self.assertFalse(power_pref.get()["on"])
 
     def test_sidecar_write_fail_does_not_fail_start(self):
         with (

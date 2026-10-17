@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 import zipfile
@@ -26,6 +27,7 @@ class Base(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="eblit-install-")
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        self.enter(patch.dict(os.environ, {"LOCALAPPDATA": str(self.root / "appdata")}))
         self.src = self.root / "payload"
         self.dest = self.root / "dest"
         make_payload(self.src)
@@ -98,15 +100,15 @@ class Sequence(Base):
         self.assertEqual(install.run(), 0)
         self.assertEqual((self.dest / "config.json").read_text(encoding="utf-8"), custom)
 
-    def test_replaces_stock_builder_nodes(self):
-        """Прошлая утечка Japan/Sweden — не «свои ноды», её надо затереть чистым payload."""
+    def test_country_name_does_not_cause_user_nodes_to_be_deleted(self):
+        """Название страны не доказывает происхождение пользовательской ноды."""
         self.dest.mkdir(parents=True)
         leaked = '{"outbounds":[{"type":"vless","tag":"Sweden","uuid":"secret"}]}'
         (self.dest / "config.json").write_text(leaked, encoding="utf-8")
         self.assertEqual(install.run(), 0)
         self.assertEqual(
             (self.dest / "config.json").read_text(encoding="utf-8"),
-            '{"outbounds": []}',
+            leaked,
         )
 
     def test_keeps_mixed_custom_and_stock(self):
@@ -132,31 +134,31 @@ class Sequence(Base):
         )
 
     def test_skips_builder_sidecars(self):
-        (self.src / "lagom-pick.json").write_text('{"tag": "Sweden"}', encoding="utf-8")
-        (self.src / "lagom-probe.json").write_text('{"sec": 10}', encoding="utf-8")
-        (self.src / "lagom-sub.json").write_text('{"url": "https://secret"}', encoding="utf-8")
+        (self.src / "eblit-pick.json").write_text('{"tag": "Sweden"}', encoding="utf-8")
+        (self.src / "eblit-probe.json").write_text('{"sec": 10}', encoding="utf-8")
+        (self.src / "eblit-sub.json").write_text('{"url": "https://secret"}', encoding="utf-8")
         (self.src / "eblit-power.json").write_text('{"on": true}', encoding="utf-8")
         (self.src / "eblit-first.json").write_text('{"read": true}', encoding="utf-8")
         (self.src / "split-ui.log").write_text("секрет", encoding="utf-8")
         self.assertEqual(install.run(), 0)
-        self.assertFalse((self.dest / "lagom-pick.json").exists())
-        self.assertFalse((self.dest / "lagom-probe.json").exists())
-        self.assertFalse((self.dest / "lagom-sub.json").exists())
+        self.assertFalse((self.dest / "eblit-pick.json").exists())
+        self.assertFalse((self.dest / "eblit-probe.json").exists())
+        self.assertFalse((self.dest / "eblit-sub.json").exists())
         self.assertFalse((self.dest / "eblit-power.json").exists())
         self.assertFalse((self.dest / "eblit-first.json").exists())
         self.assertFalse((self.dest / "split-ui.log").exists())
 
     def test_keeps_installed_subscription_and_power(self):
         self.dest.mkdir(parents=True)
-        (self.dest / "lagom-sub.json").write_text('{"url": "https://mine"}', encoding="utf-8")
+        (self.dest / "eblit-sub.json").write_text('{"url": "https://mine"}', encoding="utf-8")
         (self.dest / "eblit-power.json").write_text('{"on": true}', encoding="utf-8")
         (self.dest / "eblit-first.json").write_text('{"read": true}', encoding="utf-8")
-        (self.src / "lagom-sub.json").write_text('{"url": "https://builder"}', encoding="utf-8")
+        (self.src / "eblit-sub.json").write_text('{"url": "https://builder"}', encoding="utf-8")
         (self.src / "eblit-power.json").write_text('{"on": false}', encoding="utf-8")
         (self.src / "eblit-first.json").write_text('{"read": false}', encoding="utf-8")
         self.assertEqual(install.run(), 0)
         self.assertEqual(
-            (self.dest / "lagom-sub.json").read_text(encoding="utf-8"),
+            (self.dest / "eblit-sub.json").read_text(encoding="utf-8"),
             '{"url": "https://mine"}',
         )
         self.assertEqual(
@@ -170,11 +172,11 @@ class Sequence(Base):
 
     def test_keeps_installed_probe_interval(self):
         self.dest.mkdir(parents=True)
-        (self.dest / "lagom-probe.json").write_text('{"sec": 300}', encoding="utf-8")
-        (self.src / "lagom-probe.json").write_text('{"sec": 10}', encoding="utf-8")
+        (self.dest / "eblit-probe.json").write_text('{"sec": 300}', encoding="utf-8")
+        (self.src / "eblit-probe.json").write_text('{"sec": 10}', encoding="utf-8")
         self.assertEqual(install.run(), 0)
         self.assertEqual(
-            (self.dest / "lagom-probe.json").read_text(encoding="utf-8"),
+            (self.dest / "eblit-probe.json").read_text(encoding="utf-8"),
             '{"sec": 300}',
         )
 
@@ -282,11 +284,11 @@ class ConfigCheck(Base):
         self.assertEqual((self.dest / "sing-box.exe").read_bytes(), b"bundled")
 
     def test_empty_selector_repaired_keeps_vless(self):
-        """Живые ноды не сносим: только дописываем тег в пустой LagomVPN."""
+        """Живые ноды не сносим: только дописываем тег в пустой proxy-select."""
         self.dest.mkdir(parents=True)
         cfg = {
             "outbounds": [
-                {"type": "selector", "tag": "LagomVPN", "outbounds": []},
+                {"type": "selector", "tag": "proxy-select", "outbounds": []},
                 {"type": "vless", "tag": "Finland", "server": "node.example"},
                 {"type": "direct", "tag": "direct"},
             ]
@@ -294,7 +296,7 @@ class ConfigCheck(Base):
         (self.dest / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
         self.assertTrue(install._repair_empty_selector())
         got = json.loads((self.dest / "config.json").read_text(encoding="utf-8"))
-        sel = next(ob for ob in got["outbounds"] if ob.get("tag") == "LagomVPN")
+        sel = next(ob for ob in got["outbounds"] if ob.get("tag") == "proxy-select")
         self.assertEqual(sel["outbounds"], ["Finland"])
         self.assertEqual(
             [ob["tag"] for ob in got["outbounds"] if ob.get("type") == "vless"],
@@ -314,7 +316,7 @@ class ConfigCheck(Base):
             json.dumps(
                 {
                     "outbounds": [
-                        {"type": "selector", "tag": "LagomVPN", "outbounds": []},
+                        {"type": "selector", "tag": "proxy-select", "outbounds": []},
                         {"type": "vless", "tag": "Finland"},
                     ]
                 }
@@ -326,7 +328,7 @@ class ConfigCheck(Base):
         def check():
             calls.append(1)
             cfg = json.loads((self.dest / "config.json").read_text(encoding="utf-8"))
-            sel = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "LagomVPN")
+            sel = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "proxy-select")
             return bool(sel.get("outbounds"))
 
         with patch.object(install, "_check_singbox", check):
@@ -422,29 +424,30 @@ class Uninstall(Base):
 
 
 class WarpCfg(unittest.TestCase):
-    def test_connects_after_configure(self):
+    def test_installation_leaves_warp_disconnected(self):
         with (
             patch.object(install.warp, "wait_daemon", return_value=True),
             patch.object(install.warp, "ensure_registration", return_value=True),
+            patch.object(install.warp, "configure") as configure,
+            patch.object(install.warp, "disconnect", return_value=True) as disconnect,
             patch.object(install.warp, "configure_and_connect") as connect,
-            patch.object(install.warp, "wait_ready", return_value=True) as ready,
             patch.object(install, "_log"),
         ):
             install._configure_warp()
-        connect.assert_called_once()
-        ready.assert_called_once()
-        _, kwargs = ready.call_args
-        self.assertLessEqual(kwargs.get("tries", 30), 5)
+        configure.assert_called_once()
+        disconnect.assert_called_once()
+        connect.assert_not_called()
 
-    def test_timeout_does_not_raise(self):
+    def test_disconnect_error_is_reported(self):
         with (
             patch.object(install.warp, "wait_daemon", return_value=True),
             patch.object(install.warp, "ensure_registration", return_value=True),
-            patch.object(install.warp, "configure_and_connect"),
-            patch.object(install.warp, "wait_ready", return_value=False),
+            patch.object(install.warp, "configure"),
+            patch.object(install.warp, "disconnect", return_value=False),
             patch.object(install, "_log"),
         ):
-            install._configure_warp()
+            with self.assertRaises(OSError):
+                install._configure_warp()
 
 
 if __name__ == "__main__":

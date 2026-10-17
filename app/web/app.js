@@ -2,6 +2,9 @@ let probeSec = 30;
 let powerOn = false;
 let tickTimer = 0;
 let busy = "";
+let powerRevision = -1;
+let powerRequest = 0;
+let powerDispatch = Promise.resolve();
 let serverRefresh = null;
 let applyPing = null;
 let applySub = null;
@@ -20,7 +23,12 @@ function paintLegs(legs) {
 }
 
 function applyStack(data) {
-  if (!data || data.pending) return;
+  if (!data) return;
+  if (Number.isInteger(data.revision)) {
+    if (data.revision < powerRevision) return;
+    powerRevision = data.revision;
+  }
+  if (data.pending) return;
   if (data.kind === "reconnect") {
     // Watchdog сам инициировал перезапуск — покажем спиннер, если окно открыто.
     if (!busy) setBusy("reload");
@@ -40,6 +48,11 @@ function applyStack(data) {
     }
     setVer(data.ok === false ? "fail" : "same", data);
     paintUpdateAsk(data.ok === false ? "fail" : "same", data);
+    return;
+  }
+  if (data.kind === "shutdown") {
+    clearBusy();
+    label.textContent = data.why || "Не удалось завершить работу";
     return;
   }
   if (data.kind === "ping") {
@@ -86,15 +99,50 @@ function armSyncPower() {
 }
 
 async function call(name, arg) {
+  const transition = ["start", "stop", "reload", "test", "quit", "restore_power"].includes(name);
+  if (transition) powerRequest += 1;
+  const request = powerRequest;
   const api = window.pywebview && window.pywebview.api;
   if (!api || !api[name]) {
     clearBusy();
     return null;
   }
-  const result = arg === undefined ? await api[name]() : await api[name](arg);
+  let result;
+  try {
+    const invoke = () => arg === undefined ? api[name]() : api[name](arg);
+    if (transition) {
+      const dispatched = powerDispatch.then(invoke);
+      powerDispatch = dispatched.catch(() => {});
+      result = await dispatched;
+    } else {
+      result = await invoke();
+    }
+  } catch (err) {
+    if (request !== powerRequest) return null;
+    clearBusy();
+    label.textContent = "Ошибка операции";
+    power.title = String(err);
+    return { ok: false, why: String(err) };
+  }
+  if (request !== powerRequest) return null;
+  if (result && Number.isInteger(result.revision) && result.revision < powerRevision) return null;
   applyStack(result);
+  if (result && result.ok === false && !result.pending) {
+    clearBusy();
+    if (result.why) power.title = result.why;
+  }
   if (result && result.pending) armPull();
   return result;
+}
+
+function watchRestart(data, request) {
+  if (!data || !data.restart || request !== powerRequest) return;
+  if (Number.isInteger(data.revision)) {
+    if (data.revision <= powerRevision) return;
+    powerRevision = data.revision;
+  }
+  setBusy("reload");
+  armPull();
 }
 
 let pullTimer = 0;
@@ -127,6 +175,11 @@ function armPull() {
       inFlight = false;
       return;
     }
+    let dispatched;
+    do {
+      dispatched = powerDispatch;
+      await dispatched;
+    } while (dispatched !== powerDispatch);
     inFlight = false;
     if (!data || data.pending) {
       idle = data && data.wait ? 0 : idle + 1;
@@ -365,7 +418,13 @@ function clearBusy() {
 }
 
 power.addEventListener("click", () => {
-  if (busy) return;
+  if (busy) {
+    if (busy !== "stop") {
+      setBusy("stop");
+      call("stop");
+    }
+    return;
+  }
   const next = !powerOn;
   setBusy(next ? "start" : "stop");
   call(next ? "start" : "stop");
@@ -382,7 +441,7 @@ document.querySelectorAll("[data-action]").forEach((btn) => {
       go("#/guide");
       return;
     }
-    if (busy) return;
+    if (busy && name !== "stop") return;
     setBusy(name);
     call(name);
   });
@@ -391,7 +450,7 @@ document.querySelectorAll("[data-action]").forEach((btn) => {
 document.getElementById("btn-close").addEventListener("click", (e) => {
   e.preventDefault();
   e.stopPropagation();
-  if (updateLocked()) return;
+  setBusy("stop");
   call("quit");
 });
 document.getElementById("btn-min").addEventListener("click", (e) => {
@@ -718,8 +777,6 @@ function bindProbe() {
 }
 
 const FIRST_KEY = "eblit-first";
-const FIRST_WAIT_SEC = 30;
-let firstWaitTimer = 0;
 
 function seenFirstLocal() {
   try {
@@ -771,35 +828,6 @@ async function markFirst() {
       /* localStorage уже есть */
     }
   }
-}
-
-function paintFirstWait(sec) {
-  const btn = document.getElementById("btn-first-go");
-  if (!btn) return;
-  if (sec > 0) {
-    btn.disabled = true;
-    btn.textContent = `Понял, включить · ${sec}`;
-    return;
-  }
-  btn.disabled = false;
-  btn.textContent = "Понял, включить";
-}
-
-function armFirstWait() {
-  window.clearInterval(firstWaitTimer);
-  firstWaitTimer = 0;
-  let left = FIRST_WAIT_SEC;
-  paintFirstWait(left);
-  firstWaitTimer = window.setInterval(() => {
-    left -= 1;
-    if (left <= 0) {
-      window.clearInterval(firstWaitTimer);
-      firstWaitTimer = 0;
-      paintFirstWait(0);
-      return;
-    }
-    paintFirstWait(left);
-  }, 1000);
 }
 
 function firstSay(text) {
@@ -903,7 +931,7 @@ function bindServers() {
   let pending = [];
   let waits = 0;
   let selWanted = "auto";
-  let pingByTag = {};
+  let pingByTag = Object.create(null);
   let pinging = false;
   let pingWatch = 0;
   let subbing = false;
@@ -1000,7 +1028,7 @@ function bindServers() {
   function applyLamps(payload) {
     const nodes = Array.isArray(payload) ? payload : payload && payload.nodes;
     if (Array.isArray(nodes)) {
-      pingByTag = {};
+      pingByTag = Object.create(null);
       nodes.forEach((n) => {
         if (n && n.tag) pingByTag[n.tag] = n;
       });
@@ -1017,23 +1045,30 @@ function bindServers() {
     li.dataset.tag = n.tag;
     const dot = document.createElement("span");
     dot.className = "geo-dot";
-    const body = document.createElement("span");
+    const body = document.createElement("button");
+    body.type = "button";
     body.className = "geo-body";
+    body.title = "Выбрать сервер";
+    body.addEventListener("click", () => {
+      sel.value = n.tag;
+      sel.dispatchEvent(new Event("change"));
+    });
     const title = document.createElement("span");
     title.className = "geo-title";
     const name = document.createElement("span");
     name.className = "geo-name";
-    name.textContent = n.tag;
+    name.textContent = EblitNodeParse.displayName(n.tag);
+    name.title = n.tag;
     const now = document.createElement("span");
     now.className = "geo-now";
     now.setAttribute("aria-hidden", "true");
     now.innerHTML = '<svg viewBox="0 0 24 24"><path d="M9.2 6.4 15.6 12 9.2 17.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     title.append(name, now);
     body.appendChild(title);
-    if (n.host) {
+    if (n.host || n.ip) {
       const host = document.createElement("span");
       host.className = "geo-host";
-      host.textContent = n.host;
+      host.textContent = n.host || n.ip;
       body.appendChild(host);
     }
     const ops = document.createElement("div");
@@ -1081,7 +1116,7 @@ function bindServers() {
     nodes.forEach((n) => {
       const opt = document.createElement("option");
       opt.value = n.tag;
-      opt.textContent = n.tag;
+      opt.textContent = EblitNodeParse.displayName(n.tag);
       sel.appendChild(opt);
     });
     const tags = new Set(nodes.map((n) => n.tag));
@@ -1244,6 +1279,7 @@ function bindServers() {
         li.classList.toggle("on", want !== "auto" && li.dataset.tag === want);
       });
       if (combo) paintCombo(combo);
+      const request = powerRequest;
       try {
         const result = await api.select_node(want);
         if (result && result.ok === false) {
@@ -1261,10 +1297,7 @@ function bindServers() {
           applyLamps();
           say(note({ ...result, nodes }));
         }
-        if (result && result.restart) {
-          setBusy("reload");
-          armPull();
-        }
+        watchRestart(result, request);
       } catch (err) {
         selWanted = prev;
         sel.value = prev;
@@ -1476,13 +1509,10 @@ if (chkLan) {
       chkLan.checked = !chkLan.checked;
       return;
     }
+    const request = powerRequest;
     const res = await api.set_lan(chkLan.checked);
     paintLan(res);
-    // Питание включено — подключение уже перезапускается, кнопка не должна врать.
-    if (res && res.restart) {
-      setBusy("reload");
-      armPull();
-    }
+    watchRestart(res, request);
   });
 }
 
@@ -1614,42 +1644,32 @@ if (verBtn) {
 
 window.addEventListener("pywebviewready", async () => {
   const api = window.pywebview && window.pywebview.api;
-  if (api && api.get_probe_sec && applySavedProbe) {
-    const saved = await api.get_probe_sec();
-    if (saved && saved.sec != null) applySavedProbe(saved.sec);
-  }
+  if (!api) return;
   armPull();
   armSyncPower();
-  const st = await call("status");
-  if (api && api.sub_pull) {
-    try {
-      const sub = await api.sub_pull();
-      if (applySub && sub && !sub.skipped) applySub(sub, { quiet: true });
-    } catch (err) {
-      /* нет сети — старый список, подключение всё равно */
-    }
-  }
+  if (chkReconnect) sendAutoreconnect();
+  const versionReady = api.version().then((data) => {
+    if (data && data.version) setVer("idle", { current: data.version });
+  });
+  const preferencesReady = api.get_probe_sec().then((saved) => {
+    if (saved && saved.sec != null && applySavedProbe) applySavedProbe(saved.sec);
+  });
+  const statusReady = call("status");
+  if (serverRefresh) serverRefresh();
+  if (api.check_update_bg) api.check_update_bg();
+  if (api.lan_state) api.lan_state().then(paintLan);
+  if (api.autostart_state) api.autostart_state().then((data) => {
+    if (chkAuto && data) chkAuto.checked = !!data.on;
+  });
+  await Promise.allSettled([versionReady, preferencesReady]);
+  const st = await statusReady;
   if (!(await alreadyReadFirst())) {
     await paintFirst();
     go("#/first");
-    armFirstWait();
+    const continueButton = document.getElementById("btn-first-go");
+    if (continueButton) continueButton.disabled = false;
   } else if (st && st.want_on && !st.power) {
-    setBusy("start");
-    await call("start");
+    const restored = await call("restore_power", st.revision);
+    if (restored && restored.pending) setBusy("start");
   }
-  if (serverRefresh) serverRefresh();
-  if (!api) return;
-  if (api.version) {
-    const ver = await api.version();
-    if (ver && ver.version) setVer("idle", { current: ver.version });
-  }
-  if (api.check_update_bg) {
-    api.check_update_bg();
-    armPull();
-  }
-  if (chkReconnect) sendAutoreconnect();
-  if (api.lan_state) paintLan(await api.lan_state());
-  if (!api.autostart_state) return;
-  const auto = await api.autostart_state();
-  if (chkAuto && auto) chkAuto.checked = !!auto.on;
 });

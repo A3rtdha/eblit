@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -9,6 +11,7 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from app.version import REPO, VERSION
 
@@ -16,6 +19,7 @@ UA = "Eblit"
 SETUP_NAME = "EblitSetup.exe"
 # Меньше этого — скорее HTML-ошибка GitHub, не установщик.
 MIN_SETUP = 1_000_000
+MAX_SETUP = 300 * 1024 * 1024
 
 
 def parse_tag(tag: str) -> tuple[int, int, int]:
@@ -41,7 +45,10 @@ def _request(url: str, *, accept: str, timeout: int) -> bytes:
         headers={"User-Agent": UA, "Accept": accept},
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+        data = resp.read(MAX_SETUP + 1)
+    if len(data) > MAX_SETUP:
+        raise ValueError("ответ слишком большой")
+    return data
 
 
 def check() -> dict:
@@ -90,11 +97,13 @@ def check() -> dict:
     tag = str(data.get("tag_name") or "")
     latest = tag[1:] if tag.lower().startswith("v") else tag
     asset = ""
+    digest = ""
     for item in data.get("assets") or []:
         if not isinstance(item, dict):
             continue
         if str(item.get("name") or "").lower() == SETUP_NAME.lower():
             asset = str(item.get("browser_download_url") or "")
+            digest = str(item.get("digest") or "")
             break
 
     newer = bool(latest) and is_newer(latest, VERSION)
@@ -107,18 +116,34 @@ def check() -> dict:
         "latest": latest or VERSION,
         "newer": newer,
         "asset": asset,
+        "digest": digest,
         "html": str(data.get("html_url") or ""),
         "why": why,
     }
 
 
-def download(asset_url: str) -> Path:
-    if not asset_url or not asset_url.startswith("https://"):
+def download(asset_url: str, *, expected_digest: str = "") -> Path:
+    url = urlsplit(asset_url)
+    release_prefix = f"/{REPO}/releases/download/"
+    if (
+        url.scheme != "https"
+        or url.netloc != "github.com"
+        or not url.path.startswith(release_prefix)
+        or not re.fullmatch(r"[^/]+/EblitSetup\.exe", url.path[len(release_prefix):])
+        or url.query
+        or url.fragment
+    ):
         raise ValueError("нет ссылки на установщик")
-    dest = Path(tempfile.gettempdir()) / SETUP_NAME
     blob = _request(asset_url, accept="application/octet-stream", timeout=180)
-    if len(blob) < MIN_SETUP:
+    if len(blob) < MIN_SETUP or len(blob) > MAX_SETUP or not blob.startswith(b"MZ"):
         raise ValueError("скачался не установщик")
+    if expected_digest:
+        if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", expected_digest):
+            raise ValueError("неподдерживаемая контрольная сумма установщика")
+        actual = hashlib.sha256(blob).hexdigest()
+        if not hmac.compare_digest(actual, expected_digest[7:].lower()):
+            raise ValueError("контрольная сумма установщика не совпала")
+    dest = Path(tempfile.mkdtemp(prefix="eblit-update-")) / SETUP_NAME
     dest.write_bytes(blob)
     return dest
 

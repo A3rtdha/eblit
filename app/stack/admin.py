@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import subprocess
 import sys
 from ctypes import wintypes
 
@@ -61,16 +62,12 @@ def elevate_and_wait(file: str, params: str, *, cwd: str | None = None) -> tuple
 def elevated(stack_args: list[str]) -> tuple[bool, int]:
     """Run `--stack …` as admin and wait. Returns (launched, exit_code)."""
     cmd = argv0()
-    params = " ".join(_quote(x) for x in [*cmd[1:], "--stack", *stack_args])
+    params = subprocess.list2cmdline([*cmd[1:], "--stack", *stack_args])
     return elevate_and_wait(cmd[0], params)
 
 
 def _quote(part: str) -> str:
-    if not part:
-        return '""'
-    if any(ch in part for ch in ' \t"'):
-        return '"' + part.replace('"', '\\"') + '"'
-    return part
+    return subprocess.list2cmdline([part])
 
 
 def ensure_admin(stack_cmd: str) -> int | None:

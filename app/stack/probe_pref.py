@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 
 import app.paths as paths
+from app.storage import atomic_write
 
 DEFAULT_SEC = 30
-PROBE_FILE = "lagom-probe.json"
+PROBE_FILE = "eblit-probe.json"
 
 
 def _path():
@@ -47,7 +48,7 @@ def get() -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        return {"ok": False, "sec": DEFAULT_SEC, "why": "битый lagom-probe.json"}
+        return {"ok": False, "sec": DEFAULT_SEC, "why": "битый eblit-probe.json"}
     parsed = _coerce(data.get("sec") if isinstance(data, dict) else None)
     if parsed is None:
         return {"ok": False, "sec": DEFAULT_SEC, "why": "неверный интервал"}
@@ -59,7 +60,5 @@ def set_sec(sec) -> dict:
     if parsed is None:
         return {"ok": False, "sec": read_sec(), "why": "неверный интервал"}
     path = _path()
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps({"sec": parsed}) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    atomic_write(path, json.dumps({"sec": parsed}) + "\n")
     return {"ok": True, "sec": parsed}

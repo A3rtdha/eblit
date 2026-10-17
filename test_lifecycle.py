@@ -21,8 +21,7 @@ class StartOrder(unittest.TestCase):
             patch.object(lifecycle.health, "main", return_value=0),
             patch.object(lifecycle.singbox, "check", return_value=(False, "bad config")),
             patch.object(lifecycle.warp, "configure_and_connect") as warp,
-            patch.object(lifecycle.probe, "full_test", return_value=OFF),
-            patch.object(lifecycle.time, "sleep"),
+            patch.object(lifecycle.probe, "light_tick", return_value=OFF),
         ):
             result = lifecycle.start()
         warp.assert_not_called()
@@ -41,8 +40,7 @@ class StartOrder(unittest.TestCase):
             patch.object(lifecycle.singbox, "start") as run,
             patch.object(lifecycle.singbox, "wait_tun", return_value=True),
             patch.object(lifecycle.lan, "sync_firewall"),
-            patch.object(lifecycle.probe, "full_test", return_value=dict(ON)),
-            patch.object(lifecycle.time, "sleep"),
+            patch.object(lifecycle.probe, "light_tick", return_value=dict(ON)),
         ):
             result = lifecycle.start()
         warp.assert_called_once()
@@ -60,8 +58,7 @@ class StartOrder(unittest.TestCase):
             patch.object(lifecycle.warp, "wait_ready", return_value=False),
             patch.object(lifecycle.warp, "disconnect") as warp_off,
             patch.object(lifecycle.singbox, "start") as run,
-            patch.object(lifecycle.probe, "full_test", return_value=OFF),
-            patch.object(lifecycle.time, "sleep"),
+            patch.object(lifecycle.probe, "light_tick", return_value=OFF),
         ):
             result = lifecycle.start()
         run.assert_not_called()
@@ -89,8 +86,7 @@ class StartOrder(unittest.TestCase):
             patch.object(lifecycle.singbox, "start"),
             patch.object(lifecycle.singbox, "wait_tun", return_value=True),
             patch.object(lifecycle.lan, "sync_firewall"),
-            patch.object(lifecycle.probe, "full_test", return_value=dict(ON)),
-            patch.object(lifecycle.time, "sleep"),
+            patch.object(lifecycle.probe, "light_tick", return_value=dict(ON)),
         ):
             result = lifecycle.start()
         self.assertEqual(order, ["sub", "health"])
@@ -107,8 +103,7 @@ class StartOrder(unittest.TestCase):
             patch.object(lifecycle.singbox, "start") as run,
             patch.object(lifecycle.singbox, "wait_tun", return_value=True),
             patch.object(lifecycle.lan, "sync_firewall"),
-            patch.object(lifecycle.probe, "full_test", return_value=dict(ON)),
-            patch.object(lifecycle.time, "sleep"),
+            patch.object(lifecycle.probe, "light_tick", return_value=dict(ON)),
         ):
             result = lifecycle.start()
         run.assert_called_once()
@@ -124,8 +119,7 @@ class StartOrder(unittest.TestCase):
             patch.object(lifecycle.singbox, "wait_tun", return_value=True),
             patch.object(lifecycle.warp, "configure_and_connect") as warp,
             patch.object(lifecycle.lan, "sync_firewall"),
-            patch.object(lifecycle.probe, "full_test", return_value=dict(ON)),
-            patch.object(lifecycle.time, "sleep"),
+            patch.object(lifecycle.probe, "light_tick", return_value=dict(ON)),
         ):
             lifecycle.reload()
         refresh.assert_not_called()

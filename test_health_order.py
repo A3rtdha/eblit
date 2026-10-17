@@ -17,7 +17,7 @@ TAGS = ["Finland", "Sweden", "USA", "Italy", "Germany", "UK", "Japan"]
 
 
 def cfg_with_tags(tags: list[str]) -> dict:
-    outbounds = [{"type": "selector", "tag": "LagomVPN", "outbounds": []}]
+    outbounds = [{"type": "selector", "tag": "proxy-select", "outbounds": []}]
     for tag in tags:
         outbounds.append(
             {
@@ -145,7 +145,7 @@ class ScanAll(unittest.TestCase):
         with patch.object(m, "probe", side_effect=fake_probe):
             result = m.scan_all()
         cfg = json.loads((self.dir / "config.json").read_text(encoding="utf-8"))
-        selector = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "LagomVPN")
+        selector = next(ob for ob in cfg["outbounds"] if ob.get("tag") == "proxy-select")
         self.assertEqual(selector["outbounds"], [])
         self.assertFalse((self.dir / nodes.PICK_FILE).is_file())
         self.assertTrue(result["ok"])

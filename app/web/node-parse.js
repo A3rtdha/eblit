@@ -310,7 +310,15 @@
     return a.uuid === b.uuid && a.host === b.host && Number(a.port) === Number(b.port);
   }
 
+  function displayName(tag) {
+    return String(tag || "").replace(/\p{Regional_Indicator}{2}/gu, (flag) => {
+      const country = [...flag].map((letter) => String.fromCharCode(letter.codePointAt(0) - 0x1f1e6 + 65)).join("");
+      return `[${country}] `;
+    }).replace(/\s+/g, " ").trim();
+  }
+
   return {
+    displayName: displayName,
     parseVlessUri: parseVlessUri,
     parseNodes: parseNodes,
     maskSecret: maskSecret,

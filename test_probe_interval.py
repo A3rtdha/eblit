@@ -1,4 +1,4 @@
-"""lagom-probe.json: set/get живёт, мусор честно падает на 30."""
+"""eblit-probe.json: set/get живёт, мусор честно падает на 30."""
 
 from __future__ import annotations
 

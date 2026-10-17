@@ -1,19 +1,20 @@
-"""Lagom nodes and routing lists in config.json."""
+"""VLESS nodes and routing lists in config.json."""
 
 from __future__ import annotations
 
 import copy
 import json
 import re
-import time
 from pathlib import Path
 
 import app.paths as paths
+from app.stack import configuration
+from app.storage import atomic_write as _atomic_write
 
-SELECTOR = "LagomVPN"
-HOSTS_FILE = "lagom-nodes.json"
-FAV_FILE = "lagom-favorite.json"
-PICK_FILE = "lagom-pick.json"
+SELECTOR = configuration.SELECTOR
+HOSTS_FILE = "eblit-nodes.json"
+FAV_FILE = "eblit-favorite.json"
+PICK_FILE = "eblit-pick.json"
 
 # Теги, которые 1.0.0 по ошибке увёз как «встроенные». Не хосты и не ключи —
 # только чтобы установщик затёр ту утечку, а не принял её за ноды пользователя.
@@ -40,7 +41,7 @@ FASTLY_CIDRS = [
 DNS_VIA_TUN = ["8.8.8.8/32", "8.8.4.4/32", "1.1.1.1/32", "1.0.0.1/32"]
 
 # https://core.telegram.org/resources/cidr.txt — клиент ходит на DC по IP, не по имени.
-# ponytail: только IPv4. v6 из того файла потребует inet6 на TUN; десктоп откатывается на v4.
+# только IPv4. v6 из того файла потребует inet6 на TUN; десктоп откатывается на v4.
 TELEGRAM_CIDRS = [
     "91.108.56.0/22",
     "91.108.4.0/22",
@@ -55,7 +56,7 @@ TELEGRAM_CIDRS = [
 FAKEIP_RANGE = "198.18.0.0/15"
 DOH_BLOCK = ["dns.google", "cloudflare-dns.com", "one.one.one.one"]
 
-# Не google.com / googleapis.com / clients6.google.com — иначе поиск и Drive уедут в Lagom.
+# Не google.com / googleapis.com / clients6.google.com — иначе поиск и Drive уедут в VLESS.
 GOOGLE_AI_SUFFIXES = [
     "gemini.google.com",
     "gemini.google",
@@ -83,32 +84,11 @@ def cfg_path() -> Path:
     return paths.data_root() / "config.json"
 
 
-def _atomic_write(path: Path, text: str) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    last: OSError | None = None
-    for _ in range(6):
-        try:
-            tmp.replace(path)
-            return
-        except PermissionError as exc:
-            last = exc
-            time.sleep(0.08)
-    # ponytail: Windows не даёт replace, пока sing-box держит config.json.
-    # Пишем поверх того же файла; reload всё равно перечитает диск.
-    try:
-        path.write_text(text, encoding="utf-8")
-    except OSError:
-        if last is not None:
-            raise last
-        raise
-    tmp.unlink(missing_ok=True)
-
-
 def read_config() -> dict:
-    return json.loads(cfg_path().read_text(encoding="utf-8"))
+    return configuration.read()
 
 
+@configuration.changing
 def write_config(cfg: dict) -> None:
     _atomic_write(cfg_path(), json.dumps(cfg, indent=2) + "\n")
 
@@ -136,8 +116,6 @@ def _seed_hosts_from_config(cfg: dict) -> dict[str, str]:
             continue
         server = ob.get("server")
         host = server if isinstance(server, str) and server and not _IP_RE.match(server) else ""
-        if not host:
-            host = _sni(ob)
         if host:
             out[tag] = host
     return out
@@ -184,7 +162,7 @@ def is_builtin_tag(tag: str) -> bool:
     return False
 
 
-def lagom_suffixes(cfg: dict | None = None) -> list[str]:
+def proxy_suffixes(cfg: dict | None = None) -> list[str]:
     data = cfg if cfg is not None else read_config()
     for rule in data.get("route", {}).get("rules", []):
         if not isinstance(rule, dict):
@@ -209,7 +187,7 @@ def _find_rule(cfg: dict, *, outbound: str | None = None, action: str | None = N
     return None
 
 
-def apply_lagom_suffixes(cfg: dict, suffixes: list[str]) -> None:
+def apply_proxy_suffixes(cfg: dict, suffixes: list[str]) -> None:
     clean = []
     seen: set[str] = set()
     for item in suffixes:
@@ -223,9 +201,14 @@ def apply_lagom_suffixes(cfg: dict, suffixes: list[str]) -> None:
             seen.add(s)
             clean.append(s)
 
-    route_rule = _find_rule(cfg, outbound=SELECTOR)
+    route_rules = cfg.setdefault("route", {}).setdefault("rules", [])
+    route_rule = next(
+        (rule for rule in route_rules if rule.get("outbound") == SELECTOR and isinstance(rule.get("domain_suffix"), list)),
+        None,
+    )
     if route_rule is not None:
         route_rule["domain_suffix"] = list(clean)
+        _prioritize_proxy_domains(cfg, route_rule)
 
     dns = cfg.setdefault("dns", {})
     rules = dns.setdefault("rules", [])
@@ -238,6 +221,24 @@ def apply_lagom_suffixes(cfg: dict, suffixes: list[str]) -> None:
         rules.insert(0, {"domain_suffix": list(clean), "server": "fakeip"})
     else:
         fake_rule["domain_suffix"] = list(clean)
+
+
+def _prioritize_proxy_domains(cfg: dict, domain_rule: dict) -> None:
+    rules = cfg["route"]["rules"]
+    warp_index = next((i for i, rule in enumerate(rules) if rule.get("outbound") == "warp"), None)
+    if warp_index is None:
+        return
+    suffixes = set(domain_rule["domain_suffix"])
+    priority = [
+        rule for rule in rules[warp_index + 1:]
+        if rule is domain_rule or (
+            rule.get("action") == "reject"
+            and suffixes.intersection(rule.get("domain_suffix", []))
+        )
+    ]
+    if priority:
+        remaining = [rule for rule in rules[warp_index:] if rule not in priority]
+        rules[:] = [*rules[:warp_index], *priority, *remaining]
 
 
 def has_user_vless(cfg: dict) -> bool:
@@ -337,18 +338,21 @@ def apply_narrow_tun(cfg: dict) -> None:
             {"domain": list(DOH_BLOCK), "port": [443], "action": "reject"},
         )
 
-    suffixes = lagom_suffixes(cfg)
+    suffixes = proxy_suffixes(cfg)
     if suffixes:
-        apply_lagom_suffixes(cfg, suffixes)
+        apply_proxy_suffixes(cfg, suffixes)
     apply_telegram_cidrs(cfg)
 
 
+@configuration.changing
 def ensure_seed_suffixes_file() -> bool:
     """Дописать Gemini/AI Studio в живой config. Апдейт не затирает список — без этого их нет."""
     cfg = read_config()
-    before = lagom_suffixes(cfg)
-    apply_lagom_suffixes(cfg, before)
-    if lagom_suffixes(cfg) == before:
+    if not proxy_suffixes(cfg):
+        return False
+    before = copy.deepcopy(cfg)
+    apply_proxy_suffixes(cfg, proxy_suffixes(cfg))
+    if cfg == before:
         return False
     write_config(cfg)
     return True
@@ -363,7 +367,7 @@ def _is_telegram_rule(rule: dict) -> bool:
 
 
 def apply_telegram_cidrs(cfg: dict) -> bool:
-    """DC Telegram в TUN и в Lagom. Чужие route_address и доменные правила не трогает."""
+    """DC Telegram в TUN и в VLESS. Чужие route_address и доменные правила не трогает."""
     changed = False
     for inbound in cfg.get("inbounds", []):
         if not isinstance(inbound, dict) or inbound.get("type") != "tun":
@@ -397,6 +401,7 @@ def apply_telegram_cidrs(cfg: dict) -> bool:
     return changed
 
 
+@configuration.changing
 def ensure_telegram_cidrs_file() -> bool:
     cfg = read_config()
     if not apply_telegram_cidrs(cfg):
@@ -407,12 +412,13 @@ def ensure_telegram_cidrs_file() -> bool:
 
 def links() -> list[str]:
     ensure_seed_suffixes_file()
-    return lagom_suffixes()
+    return proxy_suffixes()
 
 
+@configuration.changing
 def set_links(suffixes: list[str]) -> None:
     cfg = read_config()
-    apply_lagom_suffixes(cfg, suffixes)
+    apply_proxy_suffixes(cfg, suffixes)
     write_config(cfg)
 
 
@@ -421,6 +427,8 @@ def parsed_to_outbound(parsed: dict) -> dict:
     host = str(parsed.get("host") or "").strip()
     port = int(parsed.get("port") or 443)
     uuid = str(parsed.get("uuid") or "").strip()
+    if not host or not uuid or not 1 <= port <= 65535:
+        raise ValueError("нужны адрес, UUID и порт от 1 до 65535")
     sni = str(parsed.get("sni") or host).strip()
     fp = str(parsed.get("fingerprint") or "firefox").strip() or "firefox"
     pbk = str(parsed.get("public_key") or "").strip()
@@ -472,7 +480,7 @@ def _vless_transport(parsed: dict, net: str) -> dict | None:
         if thost:
             tr["host"] = thost
         tr["mode"] = str(parsed.get("mode") or "auto").strip() or "auto"
-        # ponytail: extended отвергает пустой x_padding_bytes. 100-1000 — дефолт Xray.
+        # extended отвергает пустой x_padding_bytes. 100-1000 — дефолт Xray.
         tr["x_padding_bytes"] = {"from": 100, "to": 1000}
         return tr
     if net == "ws":
@@ -497,10 +505,7 @@ def _vless_transport(parsed: dict, net: str) -> dict | None:
 
 def _host_for(parsed: dict, outbound: dict) -> str:
     host = str(parsed.get("host") or outbound.get("server") or "").strip()
-    if host and not _IP_RE.match(host):
-        return host
-    sni = str(parsed.get("sni") or _sni(outbound)).strip()
-    return sni or host
+    return host
 
 
 def _selector_outbounds(cfg: dict) -> list[str]:
@@ -524,7 +529,7 @@ def _set_selector(cfg: dict, tags: list[str]) -> None:
 
 
 def ensure_selector(cfg: dict) -> bool:
-    """Пустой или мёртвый LagomVPN → первый vless или direct. True если писал.
+    """Пустой или мёртвый proxy-select → первый vless или direct. True если писал.
 
     Не создаёт селектор, если его нет: установщик чинит только уже лежащий файл.
     """
@@ -543,14 +548,14 @@ def ensure_selector(cfg: dict) -> bool:
     return True
 
 
+@configuration.changing
 def add(parsed: dict) -> dict:
     from app.stack import roster
 
     outbound = parsed_to_outbound(parsed)
     tag = outbound["tag"]
     cfg = read_config()
-    tags = vless_tags(cfg)
-    if tag in tags:
+    if any(ob.get("tag") == tag for ob in cfg["outbounds"]):
         raise ValueError(f"сервер {tag} уже есть")
     insert_at = len(cfg.get("outbounds", []))
     for i, ob in enumerate(cfg.get("outbounds", [])):
@@ -565,6 +570,7 @@ def add(parsed: dict) -> dict:
     return roster.stack_nodes()
 
 
+@configuration.changing
 def remove(tag: str) -> dict:
     from app.stack import roster
 
@@ -577,7 +583,7 @@ def remove(tag: str) -> dict:
     if tag in _selector_outbounds(cfg):
         # Пустой селектор sing-box не принимает («missing tags») — переводим на любой живой тег.
         rest = vless_tags(cfg)
-        _set_selector(cfg, rest[:1])
+        _set_selector(cfg, rest[:1] or ["direct"])
     mapping = hosts()
     mapping.pop(tag, None)
     _set_hosts(mapping)
@@ -601,6 +607,7 @@ def remove(tag: str) -> dict:
     return roster.stack_nodes()
 
 
+@configuration.changing
 def select(tag: str | None) -> None:
     pick_path = paths.data_root() / PICK_FILE
     if not tag or tag == "auto":
@@ -631,6 +638,7 @@ def select(tag: str | None) -> None:
     _atomic_write(pick_path, json.dumps({"tag": tag, "ip": ip, "manual": True}) + "\n")
 
 
+@configuration.changing
 def set_favorite(tag: str | None) -> None:
     path = paths.data_root() / FAV_FILE
     if not tag:

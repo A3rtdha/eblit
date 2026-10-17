@@ -102,7 +102,7 @@ class StartDoesNotOpenWarpGui(unittest.TestCase):
             b._start()
         gui.assert_not_called()
 
-    def test_refreshes_sub_before_elevate(self):
+    def test_subscription_is_refreshed_only_by_stack_process(self):
         b = Bridge()
         with (
             patch("app.bridge.subscribe.refresh", return_value={"ok": True, "nodes": []}) as refresh,
@@ -112,7 +112,7 @@ class StartDoesNotOpenWarpGui(unittest.TestCase):
             patch("app.bridge.singbox.running", return_value=False),
         ):
             b._start()
-        refresh.assert_called_once()
+        refresh.assert_not_called()
         elev.assert_called_once()
 
     def test_ensure_gui_opens_without_socks_probe(self):
@@ -446,7 +446,7 @@ class UpdateBg(unittest.TestCase):
     def test_update_watch_sleeps_an_hour_before_check(self):
         b = Bridge()
         with (
-            patch("app.bridge.time.sleep") as sleep,
+            patch.object(b._closing, "wait") as sleep,
             patch.object(b, "check_update_bg") as check,
         ):
             sleep.side_effect = KeyboardInterrupt()

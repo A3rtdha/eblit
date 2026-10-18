@@ -6,7 +6,7 @@ import json
 import unittest
 from pathlib import Path
 
-from app.stack import nodes
+from app.stack import nodes, routing_safety
 
 ROOT = Path(__file__).resolve().parent
 
@@ -52,7 +52,55 @@ class Sanitize(unittest.TestCase):
         self.assertIn("warp", tags)
         self.assertIn("direct", tags)
         self.assertNotIn("Sweden", tags)
-        self.assertEqual(out["route"]["rules"][0]["domain_suffix"], ["grok.com"])
+        self.assertEqual(nodes.proxy_suffixes(out), ["grok.com", *nodes.GOOGLE_AI_SUFFIXES])
+
+    def test_packaging_repairs_broad_suffixes_and_dns_query_types(self):
+        cfg = _cfg()
+        cfg["route"]["rules"][0]["domain_suffix"] = ["com", "GROK.COM"]
+        cfg["dns"] = {"rules": [{"server": "fakeip", "domain_suffix": ["com", "GROK.COM"]}]}
+
+        out = nodes.sanitize_for_ship(cfg)
+
+        suffixes = nodes.proxy_suffixes(out)
+        fakeip_rule = next(rule for rule in out["dns"]["rules"] if rule.get("server") == "fakeip")
+        self.assertEqual(suffixes, ["grok.com", *nodes.GOOGLE_AI_SUFFIXES])
+        self.assertEqual(fakeip_rule["domain_suffix"], suffixes)
+        self.assertEqual(fakeip_rule["query_type"], ["A", "AAAA"])
+        self.assertEqual(cfg["route"]["rules"][0]["domain_suffix"], ["com", "GROK.COM"])
+
+    def test_packaging_adds_riot_bypass_to_an_older_config(self):
+        cfg = _cfg()
+        cfg["dns"] = {
+            "servers": [{"tag": "google", "type": "udp", "server": "8.8.8.8"}],
+            "rules": [],
+            "final": "google",
+        }
+
+        out = nodes.sanitize_for_ship(cfg)
+
+        self.assertEqual(out["route"]["rules"][0], {
+            "process_name": list(routing_safety.RIOT_PROCESS_NAMES), "outbound": "direct",
+        })
+        self.assertEqual(out["route"]["rules"][1], {
+            "domain_suffix": list(routing_safety.RIOT_DOMAIN_SUFFIXES), "outbound": "direct",
+        })
+        self.assertEqual(out["dns"]["rules"][0], {
+            "domain_suffix": list(routing_safety.RIOT_DOMAIN_SUFFIXES), "server": "google",
+        })
+        self.assertEqual(cfg["dns"]["rules"], [])
+
+    def test_packaging_updates_fastly_routes_from_an_older_config(self):
+        cfg = _cfg()
+        cfg["inbounds"][0]["route_address"] = [*nodes.LEGACY_FASTLY_CIDRS, nodes.FAKEIP_RANGE]
+        cfg["route"]["rules"].append({"ip_cidr": list(nodes.LEGACY_FASTLY_CIDRS), "outbound": "warp"})
+
+        out = nodes.sanitize_for_ship(cfg)
+
+        self.assertEqual(out["inbounds"][0]["route_address"], [*nodes.FASTLY_CIDRS, nodes.FAKEIP_RANGE])
+        warp = next(rule for rule in out["route"]["rules"] if rule.get("outbound") == "warp")
+        self.assertEqual(warp["ip_cidr"], nodes.FASTLY_CIDRS)
+        self.assertIn("146.75.0.0/17", warp["ip_cidr"])
+        self.assertIn("151.139.0.0/16", cfg["inbounds"][0]["route_address"])
 
     def test_does_not_mutate_source(self):
         """Иначе pack мог бы записать в живой config.json сборщика 127.0.0.1 и выкинуть ноды."""

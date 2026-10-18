@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 import os
 import shutil
@@ -15,7 +14,7 @@ from pathlib import Path
 
 from app.setup.assets import WARP_MSI_URL, WEBVIEW2_URL, msiexec_args
 from app.setup.fetch import download, latest_singbox_zip
-from app.stack import autostart, nodes, singbox, teredo, warp
+from app.stack import autostart, nodes, routing_safety, singbox, teredo, warp
 from app.stack.run import hidden, image_running, kill_image
 
 DEST = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Eblit"
@@ -258,8 +257,8 @@ def _repair_empty_selector() -> bool:
     return True
 
 
-def _seed_ai_suffixes(path: Path) -> None:
-    """Апдейт бережёт user config — Gemini/AI Studio в старый список иначе не попадут."""
+def _migrate_routing(path: Path) -> None:
+    """Обновить правила маршрутизации, сохранив серверы и пользовательские домены."""
     if not path.is_file():
         return
     try:
@@ -268,16 +267,18 @@ def _seed_ai_suffixes(path: Path) -> None:
         return
     if not isinstance(cfg, dict):
         return
-    if not nodes.proxy_suffixes(cfg):
+    if not cfg.get("route") and not cfg.get("dns"):
         return
-    before = copy.deepcopy(cfg)
-    nodes.apply_proxy_suffixes(cfg, nodes.proxy_suffixes(cfg))
-    if cfg == before:
+    changed = nodes.repair_proxy_suffixes(cfg)
+    changed = nodes.migrate_fastly_routes(cfg) or changed
+    changed = nodes.remove_telegram_routes(cfg) or changed
+    changed = routing_safety.apply_game_bypass(cfg) or changed
+    if not changed:
         return
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)
-    _log(f"дописал Gemini/AI Studio в {path}")
+    _log(f"обновил правила маршрутизации в {path}")
 
 
 def _ensure_config_accepted(*, downloaded: bool) -> None:
@@ -371,10 +372,10 @@ def run() -> int:
         _copy_payload()
         shutil.copy2(sb, DEST / "sing-box.exe")
         _log("ядро extended записано поверх старого sing-box.exe")
-        _seed_ai_suffixes(DEST / "config.json")
+        _migrate_routing(DEST / "config.json")
         appdata = Path(os.environ.get("LOCALAPPDATA", "")) / "Eblit" / "config.json"
         if appdata.is_file() and appdata.resolve() != (DEST / "config.json").resolve():
-            _seed_ai_suffixes(appdata)
+            _migrate_routing(appdata)
         if not (DEST / "config.json").is_file():
             raise OSError("после копирования нет config.json")
         _begin("check")

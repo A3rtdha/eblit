@@ -1,4 +1,4 @@
 """Версия приложения. Совпадает с тегом GitHub-релиза `vX.Y.Z`."""
 
-VERSION = "1.4.9"
+VERSION = "1.5.0"
 REPO = "A3rtdha/eblit"

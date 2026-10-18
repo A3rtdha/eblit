@@ -541,6 +541,14 @@ function bindLinks() {
   if (!input && !btnExport && !btnImport) return;
   let saved = "";
 
+  function showError(message) {
+    if (!input) return;
+    input.setCustomValidity(message);
+    input.title = message;
+    input.setAttribute("aria-invalid", String(Boolean(message)));
+    if (message) input.reportValidity();
+  }
+
   async function loadLinks() {
     const api = window.pywebview && window.pywebview.api;
     if (!api || !api.links || !input) return;
@@ -551,8 +559,13 @@ function bindLinks() {
         saved = input.value;
         return;
       }
+      if (data && !data.ok) {
+        showError(data.why || "Не удалось загрузить домены");
+        return;
+      }
     } catch (err) {
-      /* ignore */
+      showError("Не удалось загрузить домены");
+      return;
     }
     if (!parseLinks(input.value).length) {
       input.value = formatLinksCsv(DEFAULT_LINKS);
@@ -571,15 +584,25 @@ function bindLinks() {
     if (!list.length) return;
     const text = formatLinksCsv(list);
     if (text === saved) return;
+    const submitted = input.value;
     try {
       const result = await api.set_links(list);
-      if (result && result.ok) saved = text;
+      if (result && result.ok) {
+        saved = formatLinksCsv(Array.isArray(result.links) ? result.links : list);
+        if (input.value === submitted) {
+          input.value = saved;
+          showError("");
+        }
+      } else if (input.value === submitted) {
+        showError((result && result.why) || "Не удалось сохранить домены");
+      }
     } catch (err) {
-      /* ignore */
+      if (input.value === submitted) showError("Не удалось сохранить домены");
     }
   }
 
   if (input) {
+    input.addEventListener("input", () => showError(""));
     input.addEventListener("change", saveLinks);
     input.addEventListener("blur", saveLinks);
   }

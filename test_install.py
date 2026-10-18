@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.setup import install
+from app.stack import nodes, routing_safety
 
 
 def make_payload(src: Path) -> None:
@@ -448,6 +449,37 @@ class WarpCfg(unittest.TestCase):
         ):
             with self.assertRaises(OSError):
                 install._configure_warp()
+
+
+class RoutingMigration(unittest.TestCase):
+    def test_upgrade_repairs_routes_and_preserves_user_servers(self):
+        example = Path(__file__).resolve().parent / "config.example.json"
+        cfg = json.loads(example.read_text(encoding="utf-8"))
+        cfg["outbounds"].append({"type": "vless", "tag": "Home", "uuid": "private"})
+        for rule in cfg["route"]["rules"]:
+            if rule.get("outbound") == nodes.SELECTOR and "domain_suffix" in rule:
+                rule["domain_suffix"].append("com")
+        tun = next(inbound for inbound in cfg["inbounds"] if inbound.get("type") == "tun")
+        tun["route_address"] = [*nodes.LEGACY_FASTLY_CIDRS, nodes.FAKEIP_RANGE, *nodes.TELEGRAM_CIDRS]
+        for rule in cfg["route"]["rules"]:
+            if rule.get("outbound") == "warp":
+                rule["ip_cidr"] = list(nodes.LEGACY_FASTLY_CIDRS)
+        cfg["route"]["rules"].append({"ip_cidr": list(nodes.TELEGRAM_CIDRS), "outbound": nodes.SELECTOR})
+        with tempfile.TemporaryDirectory(prefix="eblit-upgrade-routing-") as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(json.dumps(cfg), encoding="utf-8")
+            install._migrate_routing(path)
+            migrated = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(migrated["outbounds"], cfg["outbounds"])
+        self.assertNotIn("com", nodes.proxy_suffixes(migrated))
+        tun = next(inbound for inbound in migrated["inbounds"] if inbound.get("type") == "tun")
+        self.assertFalse(set(nodes.TELEGRAM_CIDRS).intersection(tun["route_address"]))
+        self.assertIn("146.75.0.0/17", tun["route_address"])
+        self.assertNotIn("151.139.0.0/16", tun["route_address"])
+        self.assertIn(
+            {"domain_suffix": list(routing_safety.RIOT_DOMAIN_SUFFIXES), "server": "google"},
+            migrated["dns"]["rules"],
+        )
 
 
 if __name__ == "__main__":

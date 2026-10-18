@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from ipaddress import ip_address, ip_network
 from pathlib import Path
 
 from app.stack import nodes
@@ -19,6 +20,17 @@ def load_cfg() -> dict:
 
 
 class ConfigShape(unittest.TestCase):
+    def test_current_spotify_fastly_addresses_use_warp(self):
+        cfg = load_cfg()
+        tun = next(inbound for inbound in cfg["inbounds"] if inbound.get("type") == "tun")
+        warp = next(rule for rule in cfg["route"]["rules"] if rule.get("outbound") == "warp" and rule.get("ip_cidr"))
+        for address in ("146.75.119.42", "146.75.118.250"):
+            self.assertTrue(any(ip_address(address) in ip_network(cidr) for cidr in tun["route_address"]))
+            self.assertTrue(any(ip_address(address) in ip_network(cidr) for cidr in warp["ip_cidr"]))
+        obsolete = set(nodes.LEGACY_FASTLY_CIDRS) - set(nodes.FASTLY_CIDRS)
+        self.assertFalse(obsolete.intersection(tun["route_address"]))
+        self.assertFalse(obsolete.intersection(warp["ip_cidr"]))
+
     def test_narrow_tun_and_fakeip(self):
         cfg = load_cfg()
         tun = next(ob for ob in cfg["inbounds"] if ob.get("type") == "tun")
@@ -30,16 +42,10 @@ class ConfigShape(unittest.TestCase):
         self.assertIn(nodes.FAKEIP_RANGE, routes)
         for cidr in nodes.DNS_VIA_TUN:
             self.assertIn(cidr, routes)
-        for cidr in nodes.TELEGRAM_CIDRS:
-            self.assertIn(cidr, routes)
-        tg = next(
-            r
-            for r in cfg["route"]["rules"]
-            if isinstance(r, dict)
-            and r.get("outbound") == "proxy-select"
-            and isinstance(r.get("ip_cidr"), list)
-        )
-        self.assertEqual(tg["ip_cidr"], nodes.TELEGRAM_CIDRS)
+        self.assertFalse(set(nodes.TELEGRAM_CIDRS).intersection(routes))
+        for rule in cfg["route"]["rules"]:
+            if rule.get("outbound") == "proxy-select":
+                self.assertFalse(set(nodes.TELEGRAM_CIDRS).intersection(rule.get("ip_cidr", [])))
         self.assertEqual(tun.get("address"), ["172.19.88.1/30"])
 
         dns_servers = {s.get("tag"): s for s in cfg["dns"]["servers"] if isinstance(s, dict)}
@@ -60,6 +66,7 @@ class ConfigShape(unittest.TestCase):
             r for r in cfg["dns"]["rules"] if isinstance(r, dict) and r.get("server") == "fakeip"
         )
         self.assertEqual(route_suffixes, dns_rule["domain_suffix"])
+        self.assertEqual(dns_rule["query_type"], ["A", "AAAA"])
         self.assertIn("grok.com", route_suffixes)
         self.assertIn("cursor.com", route_suffixes)
         self.assertIn("gemini.google.com", route_suffixes)

@@ -6,9 +6,10 @@ import copy
 import json
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import app.paths as paths
-from app.stack import configuration
+from app.stack import configuration, routing_safety
 from app.storage import atomic_write as _atomic_write
 
 SELECTOR = configuration.SELECTOR
@@ -23,7 +24,7 @@ STOCK_LEAK_TAGS = frozenset(
 )
 _TUN_DIRECT_CIDR = "172.19.88.0/30"
 
-FASTLY_CIDRS = [
+LEGACY_FASTLY_CIDRS = [
     "151.101.0.0/16",
     "151.139.0.0/16",
     "199.232.0.0/16",
@@ -38,10 +39,34 @@ FASTLY_CIDRS = [
     "23.235.126.0/23",
 ]
 
+# https://api.fastly.com/public-ip-list — IPv4, проверено 2026-10-19.
+FASTLY_CIDRS = [
+    "23.235.32.0/20",
+    "43.249.72.0/22",
+    "90.98.0.0/17",
+    "90.98.128.0/18",
+    "103.244.50.0/24",
+    "103.245.222.0/23",
+    "103.245.224.0/24",
+    "104.156.80.0/20",
+    "140.248.64.0/18",
+    "140.248.128.0/17",
+    "146.75.0.0/17",
+    "151.101.0.0/16",
+    "157.52.64.0/18",
+    "167.82.0.0/17",
+    "167.82.128.0/20",
+    "167.82.160.0/20",
+    "167.82.224.0/20",
+    "172.111.64.0/18",
+    "185.31.16.0/22",
+    "199.27.72.0/21",
+    "199.232.0.0/16",
+]
+
 DNS_VIA_TUN = ["8.8.8.8/32", "8.8.4.4/32", "1.1.1.1/32", "1.0.0.1/32"]
 
-# https://core.telegram.org/resources/cidr.txt — клиент ходит на DC по IP, не по имени.
-# только IPv4. v6 из того файла потребует inet6 на TUN; десктоп откатывается на v4.
+# Старые маршруты Telegram нужны только для удаления из сохранённых конфигураций.
 TELEGRAM_CIDRS = [
     "91.108.56.0/22",
     "91.108.4.0/22",
@@ -187,12 +212,54 @@ def _find_rule(cfg: dict, *, outbound: str | None = None, action: str | None = N
     return None
 
 
+def normalize_proxy_suffix(value: str) -> str:
+    message = (
+        "Укажите полный домен, например example.com. "
+        "Отдельная зона вроде com отправит через VPN слишком много сайтов"
+    )
+    if not isinstance(value, str):
+        raise ValueError(message)
+    suffix = value.strip()
+    if not suffix or re.search(r"[\s\\]", suffix):
+        raise ValueError(message)
+    if "://" in suffix:
+        try:
+            parsed = urlsplit(suffix)
+            if (
+                parsed.scheme.lower() not in {"http", "https"}
+                or parsed.username is not None
+                or parsed.password is not None
+            ):
+                raise ValueError(message)
+            suffix = parsed.hostname or ""
+            if parsed.port == 0:
+                raise ValueError(message)
+        except ValueError as exc:
+            raise ValueError(message) from exc
+    suffix = suffix.lstrip(".").rstrip(".")
+    try:
+        suffix = suffix.encode("idna").decode("ascii").lower()
+    except UnicodeError as exc:
+        raise ValueError(message) from exc
+    labels = suffix.split(".")
+    if (
+        len(suffix) > 253
+        or len(labels) < 2
+        or labels[-1].isdigit()
+        or any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels)
+    ):
+        raise ValueError(message)
+    return suffix
+
+
 def apply_proxy_suffixes(cfg: dict, suffixes: list[str]) -> None:
+    if not isinstance(suffixes, list):
+        raise ValueError("Ожидается список полных доменов")
     clean = []
     seen: set[str] = set()
     for item in suffixes:
-        s = str(item).strip().lstrip(".")
-        if not s or s in seen:
+        s = normalize_proxy_suffix(item)
+        if s in seen:
             continue
         seen.add(s)
         clean.append(s)
@@ -218,9 +285,25 @@ def apply_proxy_suffixes(cfg: dict, suffixes: list[str]) -> None:
             fake_rule = rule
             break
     if fake_rule is None:
-        rules.insert(0, {"domain_suffix": list(clean), "server": "fakeip"})
+        rules.insert(0, {"domain_suffix": list(clean), "query_type": ["A", "AAAA"], "server": "fakeip"})
     else:
         fake_rule["domain_suffix"] = list(clean)
+        fake_rule["query_type"] = ["A", "AAAA"]
+
+
+def repair_proxy_suffixes(cfg: dict) -> bool:
+    suffixes = proxy_suffixes(cfg)
+    if not suffixes:
+        return False
+    clean = []
+    for suffix in suffixes:
+        try:
+            clean.append(normalize_proxy_suffix(suffix))
+        except ValueError:
+            continue
+    before = copy.deepcopy(cfg)
+    apply_proxy_suffixes(cfg, clean)
+    return cfg != before
 
 
 def _prioritize_proxy_domains(cfg: dict, domain_rule: dict) -> None:
@@ -308,6 +391,10 @@ def sanitize_for_ship(cfg: dict) -> dict:
         if isinstance(ib, dict) and ib.get("tag") == "mixed-local":
             ib["listen"] = "127.0.0.1"
     _strip_builder_routes(cfg)
+    repair_proxy_suffixes(cfg)
+    migrate_fastly_routes(cfg)
+    remove_telegram_routes(cfg)
+    routing_safety.apply_game_bypass(cfg)
     return cfg
 
 
@@ -319,7 +406,7 @@ def apply_narrow_tun(cfg: dict) -> None:
         inbound.pop("inet4_route_address", None)
         inbound["address"] = ["172.19.88.1/30"]
         inbound.pop("inet4_address", None)
-        inbound["route_address"] = [*FASTLY_CIDRS, FAKEIP_RANGE, *DNS_VIA_TUN, *TELEGRAM_CIDRS]
+        inbound["route_address"] = [*FASTLY_CIDRS, FAKEIP_RANGE, *DNS_VIA_TUN]
 
     dns = cfg.setdefault("dns", {})
     servers = dns.setdefault("servers", [])
@@ -341,73 +428,120 @@ def apply_narrow_tun(cfg: dict) -> None:
     suffixes = proxy_suffixes(cfg)
     if suffixes:
         apply_proxy_suffixes(cfg, suffixes)
-    apply_telegram_cidrs(cfg)
+    remove_telegram_routes(cfg)
 
 
-@configuration.changing
-def ensure_seed_suffixes_file() -> bool:
-    """Дописать Gemini/AI Studio в живой config. Апдейт не затирает список — без этого их нет."""
-    cfg = read_config()
-    if not proxy_suffixes(cfg):
+def migrate_fastly_routes(cfg: dict) -> bool:
+    """Обновить прежние сети Fastly, сохранив пользовательские маршруты и порядок правил."""
+    has_warp = any(outbound.get("tag") == "warp" for outbound in cfg.get("outbounds", []) if isinstance(outbound, dict))
+    if not has_warp:
         return False
-    before = copy.deepcopy(cfg)
-    apply_proxy_suffixes(cfg, proxy_suffixes(cfg))
-    if cfg == before:
-        return False
-    write_config(cfg)
-    return True
-
-
-def _is_telegram_rule(rule: dict) -> bool:
-    return (
-        rule.get("outbound") == SELECTOR
-        and isinstance(rule.get("ip_cidr"), list)
-        and "domain_suffix" not in rule
-    )
-
-
-def apply_telegram_cidrs(cfg: dict) -> bool:
-    """DC Telegram в TUN и в VLESS. Чужие route_address и доменные правила не трогает."""
     changed = False
+    legacy = set(LEGACY_FASTLY_CIDRS)
+    current = set(FASTLY_CIDRS)
+    managed = legacy | current
+    has_managed_tun = False
     for inbound in cfg.get("inbounds", []):
         if not isinstance(inbound, dict) or inbound.get("type") != "tun":
             continue
-        routes = inbound.get("route_address")
-        if not isinstance(routes, list):
-            routes = []
-            inbound["route_address"] = routes
-            changed = True
-        have = {str(item) for item in routes}
-        for cidr in TELEGRAM_CIDRS:
-            if cidr not in have:
-                routes.append(cidr)
-                have.add(cidr)
+        owned = inbound.get("tag") == "tun-fastly" or inbound.get("interface_name") == "tun-fastly"
+        for key in ("route_address", "inet4_route_address"):
+            cidrs = inbound.get(key)
+            if not isinstance(cidrs, list) or not (owned or legacy.issubset(cidrs) or current.issubset(cidrs)):
+                continue
+            has_managed_tun = True
+            updated = [*FASTLY_CIDRS, *(cidr for cidr in cidrs if cidr not in managed)]
+            if updated != cidrs:
+                inbound[key] = updated
                 changed = True
 
-    route = cfg.setdefault("route", {})
+    route = cfg.get("route", {})
     if not isinstance(route, dict):
         return changed
-    rules = route.setdefault("rules", [])
+    rules = route.get("rules", [])
     if not isinstance(rules, list):
         return changed
-    found = next((rule for rule in rules if isinstance(rule, dict) and _is_telegram_rule(rule)), None)
-    wanted = list(TELEGRAM_CIDRS)
-    if found is None:
-        rules.append({"ip_cidr": wanted, "outbound": SELECTOR})
-        return True
-    if found.get("ip_cidr") != wanted:
-        found["ip_cidr"] = wanted
-        return True
+    has_fastly_rule = False
+    for rule in rules:
+        cidrs = rule.get("ip_cidr") if isinstance(rule, dict) else None
+        if not isinstance(cidrs, list) or rule.get("outbound") != "warp":
+            continue
+        if not has_managed_tun and not (legacy.issubset(cidrs) or current.issubset(cidrs)):
+            continue
+        if not any(cidr in managed for cidr in cidrs):
+            continue
+        has_fastly_rule = True
+        updated = [*FASTLY_CIDRS, *(cidr for cidr in cidrs if cidr not in managed)]
+        if updated != cidrs:
+            rule["ip_cidr"] = updated
+            changed = True
+    if has_managed_tun and not has_fastly_rule:
+        rules.append({"ip_cidr": list(FASTLY_CIDRS), "outbound": "warp"})
+        route["rules"] = rules
+        cfg["route"] = route
+        changed = True
     return changed
 
 
 @configuration.changing
-def ensure_telegram_cidrs_file() -> bool:
+def ensure_seed_suffixes_file() -> bool:
+    """Починить домены и fakeip в старом config, сохранив допустимые пользовательские домены."""
     cfg = read_config()
-    if not apply_telegram_cidrs(cfg):
+    if not repair_proxy_suffixes(cfg):
         return False
     write_config(cfg)
     return True
+
+
+def remove_telegram_routes(cfg: dict) -> bool:
+    """Удалить прежние маршруты Telegram, сохранив остальные пользовательские сети."""
+    changed = False
+    legacy = set(TELEGRAM_CIDRS)
+    for inbound in cfg.get("inbounds", []):
+        if not isinstance(inbound, dict) or inbound.get("type") != "tun":
+            continue
+        inbound_changed = False
+        for key in ("route_address", "inet4_route_address"):
+            routes = inbound.get(key)
+            if not isinstance(routes, list):
+                continue
+            kept = [cidr for cidr in routes if cidr not in legacy]
+            if kept != routes:
+                inbound[key] = kept
+                inbound_changed = True
+                changed = True
+        if inbound_changed and not any(
+            inbound.get(key) for key in ("route_address", "inet4_route_address", "inet6_route_address")
+        ):
+            inbound["auto_route"] = False
+
+    route = cfg.get("route", {})
+    if not isinstance(route, dict):
+        return changed
+    rules = route.get("rules", [])
+    if not isinstance(rules, list):
+        return changed
+    destination_keys = ("domain", "domain_suffix", "domain_keyword", "domain_regex", "geosite", "geoip", "ip_is_private")
+    kept_rules = []
+    for rule in rules:
+        cidrs = rule.get("ip_cidr") if isinstance(rule, dict) else None
+        if not isinstance(cidrs, list) or rule.get("outbound") != SELECTOR:
+            kept_rules.append(rule)
+            continue
+        kept_cidrs = [cidr for cidr in cidrs if cidr not in legacy]
+        if kept_cidrs == cidrs:
+            kept_rules.append(rule)
+            continue
+        changed = True
+        if kept_cidrs:
+            rule["ip_cidr"] = kept_cidrs
+            kept_rules.append(rule)
+        elif any(rule.get(key) for key in destination_keys):
+            del rule["ip_cidr"]
+            kept_rules.append(rule)
+    if kept_rules != rules:
+        route["rules"] = kept_rules
+    return changed
 
 
 def links() -> list[str]:

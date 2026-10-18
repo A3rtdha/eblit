@@ -3,7 +3,19 @@ from __future__ import annotations
 from functools import wraps
 
 from app.log import write
-from app.stack import health, lan, probe, singbox, subscribe, warp
+from app.stack import configuration, health, lan, nodes, probe, routing_safety, singbox, subscribe, warp
+
+
+@configuration.changing
+def _prepare_routing() -> None:
+    cfg = nodes.read_config()
+    changed = nodes.repair_proxy_suffixes(cfg)
+    changed = nodes.migrate_fastly_routes(cfg) or changed
+    changed = nodes.remove_telegram_routes(cfg) or changed
+    changed = routing_safety.apply_game_bypass(cfg) or changed
+    if changed:
+        nodes.write_config(cfg)
+        write("маршруты: домены проверены, Riot напрямую, Telegram исключён")
 
 
 def _rollback_on_error(fn):
@@ -24,15 +36,7 @@ def _rollback_on_error(fn):
 @_rollback_on_error
 def start() -> dict:
     write("подключение: старт")
-    try:
-        from app.stack import nodes
-
-        if nodes.ensure_seed_suffixes_file():
-            write("домены: Gemini/AI Studio дописаны в список")
-        if nodes.ensure_telegram_cidrs_file():
-            write("telegram: DC-сети в TUN")
-    except (OSError, ValueError, TypeError) as exc:
-        write(f"домены: {exc}")
+    _prepare_routing()
     singbox.kill()
     if not singbox.wait_gone():
         raise OSError("sing-box не остановился")
@@ -89,13 +93,7 @@ def stop() -> dict:
 @_rollback_on_error
 def reload() -> dict:
     write("подключение: перезапуск")
-    try:
-        from app.stack import nodes
-
-        if nodes.ensure_telegram_cidrs_file():
-            write("telegram: DC-сети в TUN")
-    except (OSError, ValueError, TypeError) as exc:
-        write(f"telegram: {exc}")
+    _prepare_routing()
     if health.main() != 0:
         write("health: нет живого сервера — перезапуск как есть")
     ok, err = singbox.check()

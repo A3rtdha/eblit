@@ -4,19 +4,9 @@ from pathlib import Path
 
 WARP_MSI_URL = "https://downloads.cloudflareclient.com/v1/download/windows/ga"
 WEBVIEW2_URL = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
-# SagerNet не умеет xhttp. Форк — тот же JSON (Reality/TUN/fakeip), плюс XHTTP.
-SINGBOX_API = "https://api.github.com/repos/shtorm-7/sing-box-extended/releases/latest"
-
-
-def pick_singbox_zip(assets: list) -> str | None:
-    for item in assets:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or "")
-        url = item.get("browser_download_url")
-        if name.endswith("-windows-amd64.zip") and url:
-            return str(url)
-    return None
+# Extended сохраняет XHTTP; сборка Eblit добавляет проверку полного сертификата.
+SINGBOX_VERSION = "1.14.1-extended-2.7.2-eblit.1"
+SINGBOX_SHA256 = "99755ba377ff7a4274762933b5327d8d674dfd63d9a3a91ce9bb59d83898ac04"
 
 
 def msiexec_args(msi: Path) -> list[str]:

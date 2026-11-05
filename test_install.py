@@ -6,7 +6,6 @@ import json
 import os
 import tempfile
 import unittest
-import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,6 +34,7 @@ class Base(unittest.TestCase):
         self.enter(patch.object(install, "DEST", self.dest))
         self.enter(patch.object(install, "payload_dir", return_value=self.src))
         self.enter(patch.object(install, "kill_image"))
+        self.verify = self.enter(patch.object(install, "verify_singbox"))
         self.logs: list[str] = []
         self.enter(patch.object(install, "_log", self.logs.append))
 
@@ -229,42 +229,32 @@ class SingboxPick(Base):
         self.dl.mkdir()
         (self.src / "sing-box.exe").write_bytes(b"bundled")
 
-    def zip_with(self, name: str) -> None:
-        def fake_download(url, dest, timeout=120):
-            with zipfile.ZipFile(dest, "w") as zf:
-                zf.writestr(name, b"downloaded")
+    def test_uses_verified_bundled_core_without_network(self):
+        with patch.object(install, "download") as download:
+            result = install._install_singbox(self.dl)
+        self.assertEqual(result, self.src / "sing-box.exe")
+        self.verify.assert_called_once_with(result)
+        download.assert_not_called()
 
-        return fake_download
-
-    def test_takes_exe_from_zip(self):
-        with (
-            patch.object(install, "latest_singbox_zip", return_value="u"),
-            patch.object(install, "download", self.zip_with("sing-box-1.0/sing-box.exe")),
-        ):
-            got = install._install_singbox(self.dl)
-        self.assertEqual(got.read_bytes(), b"downloaded")
-
-    def test_bad_zip_falls_back_to_bundled(self):
-        def corrupt(url, dest, timeout=120):
-            Path(dest).write_bytes(b"not a zip")
-
-        with (
-            patch.object(install, "latest_singbox_zip", return_value="u"),
-            patch.object(install, "download", corrupt),
-        ):
-            got = install._install_singbox(self.dl)
-        self.assertEqual(got.read_bytes(), b"bundled")
-
-    def test_network_down_falls_back_to_bundled(self):
-        with patch.object(install, "latest_singbox_zip", side_effect=OSError("нет сети")):
-            got = install._install_singbox(self.dl)
-        self.assertEqual(got.read_bytes(), b"bundled")
-
-    def test_no_bundled_and_no_network_raises(self):
+    def test_missing_bundled_core_raises_without_downloading_a_replacement(self):
         (self.src / "sing-box.exe").unlink()
-        with patch.object(install, "latest_singbox_zip", side_effect=OSError("нет сети")):
-            with self.assertRaises(OSError):
+        with patch.object(install, "download") as download:
+            with self.assertRaisesRegex(OSError, "в установщике нет ядра"):
                 install._install_singbox(self.dl)
+        download.assert_not_called()
+
+    def test_empty_bundled_core_is_rejected(self):
+        (self.src / "sing-box.exe").write_bytes(b"")
+        with self.assertRaisesRegex(OSError, "в установщике нет ядра"):
+            install._install_singbox(self.dl)
+        self.verify.assert_not_called()
+
+    def test_modified_bundled_core_is_rejected_without_downloading_a_replacement(self):
+        self.verify.side_effect = OSError("checksum mismatch")
+        with patch.object(install, "download") as download:
+            with self.assertRaisesRegex(OSError, "checksum"):
+                install._install_singbox(self.dl)
+        download.assert_not_called()
 
 
 class ConfigCheck(Base):

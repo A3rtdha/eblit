@@ -20,12 +20,15 @@ Windows-приложение: узкий split для Fastly/Spotify (через
 
 ## Сборка из исходников
 
-Нужны Python 3.12, PyInstaller, `sing-box.exe` рядом с проектом.
+Нужны Python 3.12 и PyInstaller. Ядро собирается из закреплённой версии sing-box extended: XHTTP сохраняется, для Hysteria2 добавлена проверка отпечатка полного сертификата.
 
-```
+```powershell
 pip install -r app/requirements.txt pyinstaller
 copy config.example.json config.json
+python tools/core/build.py --work-dir "$env:TEMP/eblit-core" --output sing-box.exe
 ```
+
+Команда для PowerShell сама скачивает закреплённый Go и исходники, проверяет их контрольные суммы и собирает `sing-box.exe` рядом с проектом. Сборщик проверяет передачу трафика через XHTTP и Hysteria2 на локальном стенде и отказ при неверном отпечатке сертификата. Установщик использует эту сборку; упаковка проверяет её SHA-256. GitHub Actions проверяет сборку по тегу; релиз и установщик публикуются через учётную запись владельца.
 
 В `config.json` подставь свои VLESS (uuid, public_key, хост). Живой файл в git не лежит.
 

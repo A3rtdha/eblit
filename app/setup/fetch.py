@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-import json
-import urllib.error
+import hashlib
 import urllib.request
 from pathlib import Path
 
-from app.setup.assets import SINGBOX_API, pick_singbox_zip
+from app.setup.assets import SINGBOX_SHA256, SINGBOX_VERSION
 
 UA = "eblit-setup"
+
+
+def verify_singbox(path: Path) -> None:
+    with path.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    if digest != SINGBOX_SHA256:
+        raise OSError(f"sing-box: контрольная сумма не совпадает с версией {SINGBOX_VERSION}")
 
 
 def download(url: str, dest: Path, timeout: int = 120) -> None:
@@ -22,16 +28,3 @@ def download(url: str, dest: Path, timeout: int = 120) -> None:
     if dest.stat().st_size <= 0:
         dest.unlink(missing_ok=True)
         raise OSError(f"пустая загрузка: {url}")
-
-
-def latest_singbox_zip() -> str:
-    req = urllib.request.Request(SINGBOX_API, headers={"User-Agent": UA, "Accept": "application/vnd.github+json"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.load(resp)
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise OSError(f"github sing-box: {exc}") from exc
-    url = pick_singbox_zip(data.get("assets") or [])
-    if not url:
-        raise OSError("в latest нет windows-amd64.zip")
-    return url

@@ -1,4 +1,4 @@
-"""Pick the first VLESS geo that answers Reality. Do not scan the rest."""
+"""Pick the first proxy server that answers the HTTP probe. Do not scan the rest."""
 
 from __future__ import annotations
 
@@ -190,7 +190,7 @@ def last_pick() -> str | None:
         try:
             data = json.loads(_pick().read_text(encoding="utf-8"))
             tag = data.get("tag") if isinstance(data, dict) else None
-            if isinstance(tag, str) and tag in nodes.vless_tags():
+            if isinstance(tag, str) and tag in nodes.server_tags():
                 return tag
         except (OSError, json.JSONDecodeError, TypeError):
             pass
@@ -207,7 +207,7 @@ def favorite_tag() -> str | None:
     if not isinstance(data, dict):
         return None
     tag = data.get("tag")
-    known = nodes.vless_tags()
+    known = nodes.server_tags()
     if isinstance(tag, str) and tag in known:
         return tag
     host = data.get("host")
@@ -221,7 +221,7 @@ def favorite_tag() -> str | None:
 
 def try_order(cfg: dict | None = None) -> list[str]:
     data = cfg if cfg is not None else nodes.read_config()
-    tags = nodes.vless_tags(data)
+    tags = nodes.server_tags(data)
     order: list[str] = []
     fav = favorite_tag()
     if fav in tags:
@@ -265,12 +265,12 @@ def last_result_line() -> str:
 
 
 def scan_all() -> dict:
-    """Пинг всех vless. Не first-live и не пишет selector / eblit-pick."""
+    """Пинг всех серверов. Не first-live и не пишет selector / eblit-pick."""
     cfg = nodes.read_config()
     by_tag = {
         ob.get("tag"): ob
         for ob in cfg.get("outbounds", [])
-        if isinstance(ob, dict) and ob.get("type") == "vless" and ob.get("tag")
+        if nodes.is_server(ob) and ob.get("tag")
     }
     host_map = nodes.hosts()
     jobs = [(tag, SCAN_PORT + i) for i, tag in enumerate(by_tag)]
@@ -317,10 +317,10 @@ def main() -> int:
     by_tag = {
         ob.get("tag"): ob
         for ob in cfg.get("outbounds", [])
-        if isinstance(ob, dict) and ob.get("type") == "vless" and ob.get("tag")
+        if nodes.is_server(ob) and ob.get("tag")
     }
     if not by_tag:
-        log("ERR no vless outbounds")
+        log("ERR no proxy server outbounds")
         return 1
 
     host_map = nodes.hosts()
@@ -375,7 +375,7 @@ def main() -> int:
             log("RESULT none — no live server")
             return 1
         tag, ip = winner
-        if tag not in nodes.vless_tags(current) or nodes.manual_tag() != manual:
+        if tag not in nodes.server_tags(current) or nodes.manual_tag() != manual:
             log("RESULT selection changed during probe; retry")
             return 1
         nodes._set_selector(current, [tag])

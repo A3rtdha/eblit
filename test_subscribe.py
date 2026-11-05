@@ -9,8 +9,9 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from email.message import Message
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from app.bridge import Bridge
 from app.stack import nodes, subscribe
@@ -403,6 +404,71 @@ class ParseBody(unittest.TestCase):
         self.assertEqual({n["tag"] for n in got["nodes"]}, {"proxy", "proxy-2"})
 
 
+class DeviceHeaders(unittest.TestCase):
+    def setUp(self):
+        self.registry = MagicMock()
+        self.registry.HKEY_LOCAL_MACHINE = 1
+        self.registry.KEY_READ = 0x20019
+        self.registry.KEY_WOW64_64KEY = 0x0100
+        self.registry.QueryValueEx.return_value = (UUID_A, 1)
+        for patcher in (
+            patch.dict("sys.modules", {"winreg": self.registry}),
+            patch.object(subscribe.sys, "platform", "win32"),
+            patch.object(subscribe.platform, "version", return_value="10.0.26100"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_download_sends_stable_hashed_device_identity_for_both_clients(self):
+        url = "https://panel.example/sub/private?format=happ&token=test"
+        response = MagicMock()
+        response.geturl.return_value = url
+        response.headers = Message()
+        response.read.return_value = vless_uri().encode()
+        requests = []
+        for guid, ua in (
+            (f"  {UUID_A.upper()}  ", subscribe.UA_HAPP),
+            (UUID_A, subscribe.UA_V2RAYN),
+        ):
+            with self.subTest(ua=ua):
+                self.registry.QueryValueEx.return_value = (guid, 1)
+                with patch.object(subscribe, "_OPENER") as opener:
+                    opener.open.return_value.__enter__.return_value = response
+                    body, err = subscribe._download(url, ua)
+                self.assertEqual(body, vless_uri())
+                self.assertEqual(err, "")
+                request = opener.open.call_args.args[0]
+                requests.append(request)
+                self.assertEqual(request.full_url, url)
+                headers = {name.lower(): value for name, value in request.header_items()}
+                self.assertEqual(headers["user-agent"], ua)
+                self.assertEqual(headers["accept"], "*/*")
+                self.assertEqual(
+                    headers["x-hwid"],
+                    "91ccfc8fd396dd07bd0bdb1429a1049e8eada22ae99938811691dcd2a56dfcdb",
+                )
+                self.assertEqual(headers["x-device-os"], "Windows")
+                self.assertEqual(headers["x-ver-os"], "10.0.26100")
+                self.assertEqual(headers["x-device-model"], "PC")
+                self.assertNotIn(UUID_A, repr(headers).lower())
+        self.assertEqual(requests[0].get_header("X-hwid"), requests[1].get_header("X-hwid"))
+
+    def test_registry_unavailable_omits_device_headers(self):
+        self.registry.OpenKey.side_effect = OSError("registry unavailable")
+        self.assertEqual(subscribe._device_headers(), {})
+
+    def test_registry_without_usable_machine_id_omits_device_headers(self):
+        for guid in (None, "", "  ", 42):
+            with self.subTest(guid=guid):
+                self.registry.QueryValueEx.return_value = (guid, 1)
+                self.assertEqual(subscribe._device_headers(), {})
+
+    def test_non_windows_omits_device_headers_without_reading_registry(self):
+        with patch.object(subscribe.sys, "platform", "linux"):
+            self.assertEqual(subscribe._device_headers(), {})
+        self.registry.OpenKey.assert_not_called()
+
+
 class SyncAndFetch(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="eblit-sub-")
@@ -464,6 +530,26 @@ class SyncAndFetch(unittest.TestCase):
             result = subscribe.refresh()
         self.assertFalse(result["ok"])
         self.assertIn("Finland", self._tags())
+
+    def test_device_limit_keeps_owned_nodes_and_subscription(self):
+        subscribe.sync(subscribe.parse_body(vless_uri())["nodes"])
+        subscribe.set_url("https://panel.example/sub?format=happ")
+        before_config = self.cfg.read_bytes()
+        before_pref = (self.dir / subscribe.SUB_FILE).read_bytes()
+        response = MagicMock()
+        response.geturl.return_value = "https://panel.example/sub?format=happ"
+        response.headers = Message()
+        response.headers["X-Hwid-Max-Devices-Reached"] = "true"
+        with patch.object(subscribe, "_OPENER") as opener:
+            opener.open.return_value.__enter__.return_value = response
+            result = subscribe.refresh()
+        self.assertFalse(result["ok"])
+        self.assertIn("лимит устройств", result["why"])
+        self.assertEqual(self.cfg.read_bytes(), before_config)
+        self.assertEqual((self.dir / subscribe.SUB_FILE).read_bytes(), before_pref)
+        self.assertIn("Finland", self._tags())
+        opener.open.assert_called_once()
+        response.read.assert_not_called()
 
     def test_duplicate_tags_get_suffix(self):
         raw = vless_uri("Finland", "a.example", uuid=UUID_A) + "\n" + vless_uri(
@@ -685,6 +771,41 @@ class SyncAndFetch(unittest.TestCase):
             body, err = subscribe._download("https://panel.example/sub", subscribe.UA_HAPP)
         self.assertIsNone(body)
         self.assertIn("редирект", err)
+
+    def test_download_reports_device_rejection_without_parsing_body(self):
+        for name, expected in (
+            ("X-Hwid-Max-Devices-Reached", "лимит устройств"),
+            ("X-Hwid-Not-Supported", "не принял идентификатор устройства"),
+        ):
+            for value in ("true", "1", "TRUE"):
+                with self.subTest(header=name, value=value):
+                    response = MagicMock()
+                    response.geturl.return_value = "https://panel.example/sub"
+                    response.headers = Message()
+                    response.headers[name] = value
+                    with patch.object(subscribe, "_OPENER") as opener:
+                        opener.open.return_value.__enter__.return_value = response
+                        body, err = subscribe._download(
+                            "https://panel.example/sub", subscribe.UA_HAPP
+                        )
+                    self.assertIsNone(body)
+                    self.assertIn(expected, err)
+                    response.read.assert_not_called()
+
+    def test_download_ignores_inactive_device_rejection_flags(self):
+        for value in ("false", "0", ""):
+            with self.subTest(value=value):
+                response = MagicMock()
+                response.geturl.return_value = "https://panel.example/sub"
+                response.headers = Message()
+                response.headers["X-Hwid-Max-Devices-Reached"] = value
+                response.headers["X-Hwid-Not-Supported"] = value
+                response.read.return_value = vless_uri().encode()
+                with patch.object(subscribe, "_OPENER") as opener:
+                    opener.open.return_value.__enter__.return_value = response
+                    body, err = subscribe._download("https://panel.example/sub", subscribe.UA_HAPP)
+                self.assertEqual(body, vless_uri())
+                self.assertEqual(err, "")
 
 
 class BridgeSub(unittest.TestCase):

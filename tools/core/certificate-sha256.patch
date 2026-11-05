@@ -1,0 +1,85 @@
+--- a/option/tls.go
++++ b/option/tls.go
+@@ -117,6 +117,7 @@
+ 	CurvePreferences           badoption.Listable[CurvePreference] `json:"curve_preferences,omitempty"`
+ 	Certificate                badoption.Listable[string]          `json:"certificate,omitempty"`
+ 	CertificatePath            string                              `json:"certificate_path,omitempty"`
++	CertificateSHA256          badoption.Listable[[]byte]          `json:"certificate_sha256,omitempty"`
+ 	CertificatePublicKeySHA256 badoption.Listable[[]byte]          `json:"certificate_public_key_sha256,omitempty"`
+ 	ClientCertificate          badoption.Listable[string]          `json:"client_certificate,omitempty"`
+ 	ClientCertificatePath      string                              `json:"client_certificate_path,omitempty"`
+--- a/common/tls/client.go
++++ b/common/tls/client.go
+@@ -82,6 +82,14 @@
+ func NewClientWithOptions(options ClientOptions) (Config, error) {
+ 	if !options.Options.Enabled {
+ 		return nil, nil
++	}
++	if len(options.Options.CertificateSHA256) > 0 {
++		if options.Options.Engine != "" && options.Options.Engine != C.TLSEngineGo {
++			return nil, E.New("certificate_sha256 requires the Go TLS engine")
++		}
++		if options.Options.Reality != nil && options.Options.Reality.Enabled {
++			return nil, E.New("certificate_sha256 is incompatible with reality")
++		}
+ 	}
+ 	if !options.KTLSCompatible {
+ 		if options.Options.KernelTx {
+--- a/common/tls/std_client.go
++++ b/common/tls/std_client.go
+@@ -134,13 +134,13 @@
+ 	} else if options.DisableSNI {
+ 		tlsConfig.InsecureSkipVerify = true
+ 	}
+-	if len(options.CertificatePublicKeySHA256) > 0 {
++	if len(options.CertificateSHA256) > 0 || len(options.CertificatePublicKeySHA256) > 0 {
+ 		if len(options.Certificate) > 0 || options.CertificatePath != "" {
+-			return nil, E.New("certificate_public_key_sha256 is conflict with certificate or certificate_path")
++			return nil, E.New("certificate_sha256 or certificate_public_key_sha256 is conflict with certificate or certificate_path")
+ 		}
+ 		tlsConfig.InsecureSkipVerify = true
+ 		tlsConfig.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+-			return VerifyPublicKeySHA256(options.CertificatePublicKeySHA256, rawCerts)
++			return VerifyPinnedCertificate(options.CertificateSHA256, options.CertificatePublicKeySHA256, rawCerts)
+ 		}
+ 	}
+ 	if len(options.ALPN) > 0 {
+@@ -293,3 +293,19 @@
+ 	}
+ 	return E.New("unrecognized remote public key: ", base64.StdEncoding.EncodeToString(hashValue[:]))
+ }
++
++func VerifyPinnedCertificate(certificateHashes [][]byte, publicKeyHashes [][]byte, rawCerts [][]byte) error {
++	if len(rawCerts) == 0 {
++		return E.New("missing peer certificate")
++	}
++	certificateHash := sha256.Sum256(rawCerts[0])
++	for _, knownHash := range certificateHashes {
++		if bytes.Equal(knownHash, certificateHash[:]) {
++			return nil
++		}
++	}
++	if len(publicKeyHashes) > 0 {
++		return VerifyPublicKeySHA256(publicKeyHashes, rawCerts)
++	}
++	return E.New("unrecognized remote certificate: ", base64.StdEncoding.EncodeToString(certificateHash[:]))
++}
+--- a/common/tls/utls_client.go
++++ b/common/tls/utls_client.go
+@@ -209,13 +209,13 @@
+ 			return nil, E.New("disable_sni is unsupported in reality")
+ 		}
+ 	}
+-	if len(options.CertificatePublicKeySHA256) > 0 {
++	if len(options.CertificateSHA256) > 0 || len(options.CertificatePublicKeySHA256) > 0 {
+ 		if len(options.Certificate) > 0 || options.CertificatePath != "" {
+-			return nil, E.New("certificate_public_key_sha256 is conflict with certificate or certificate_path")
++			return nil, E.New("certificate_sha256 or certificate_public_key_sha256 is conflict with certificate or certificate_path")
+ 		}
+ 		tlsConfig.InsecureSkipVerify = true
+ 		tlsConfig.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+-			return VerifyPublicKeySHA256(options.CertificatePublicKeySHA256, rawCerts)
++			return VerifyPinnedCertificate(options.CertificateSHA256, options.CertificatePublicKeySHA256, rawCerts)
+ 		}
+ 	}
+ 	if len(options.ALPN) > 0 {

@@ -8,12 +8,11 @@ import sys
 import tempfile
 import time
 import winreg
-import zipfile
 from datetime import datetime
 from pathlib import Path
 
 from app.setup.assets import WARP_MSI_URL, WEBVIEW2_URL, msiexec_args
-from app.setup.fetch import download, latest_singbox_zip
+from app.setup.fetch import download, verify_singbox
 from app.stack import autostart, nodes, routing_safety, singbox, teredo, warp
 from app.stack.run import hidden, image_running, kill_image
 
@@ -207,24 +206,11 @@ def _install_warp(tmp: Path) -> None:
 
 def _install_singbox(tmp: Path) -> Path:
     bundled = payload_dir() / "sing-box.exe"
-    try:
-        _log("качаю актуальный sing-box…")
-        zpath = tmp / "sing-box.zip"
-        download(latest_singbox_zip(), zpath)
-        with zipfile.ZipFile(zpath) as zf:
-            for info in zf.infolist():
-                if info.filename.endswith("sing-box.exe") and not info.is_dir():
-                    data = zf.read(info)
-                    out = tmp / "sing-box.exe"
-                    out.write_bytes(data)
-                    return out
-        raise OSError("в zip нет sing-box.exe")
-    except (OSError, zipfile.BadZipFile, ValueError) as exc:
-        # Обрезанный zip кидает BadZipFile, а не OSError: без этого установщик просто падал.
-        if bundled.is_file() and bundled.stat().st_size > 0:
-            _log(f"свежий sing-box не забрался ({exc}) — беру bundled")
-            return bundled
-        raise OSError(f"sing-box не скачался и bundled нет: {exc}") from exc
+    if not bundled.is_file() or bundled.stat().st_size == 0:
+        raise OSError("в установщике нет ядра sing-box для Eblit")
+    verify_singbox(bundled)
+    _log("использую ядро sing-box из установщика")
+    return bundled
 
 
 def _check_singbox() -> bool:
@@ -289,6 +275,7 @@ def _ensure_config_accepted(*, downloaded: bool) -> None:
         return
     bundled = payload_dir() / "sing-box.exe"
     if downloaded and bundled.is_file() and bundled.stat().st_size > 0:
+        verify_singbox(bundled)
         _log("свежий sing-box не принял config.json — ставлю bundled")
         shutil.copy2(bundled, DEST / "sing-box.exe")
         if _check_singbox():

@@ -25,6 +25,13 @@ def _singbox() -> Path | None:
 
 
 def main() -> int:
+    from app.setup.fetch import verify_singbox
+
+    sb = _singbox()
+    if sb is None:
+        print("нет sing-box.exe — положи закреплённое ядро рядом с проектом", file=sys.stderr)
+        return 1
+    verify_singbox(sb)
     spec = ROOT / "eblit.spec"
     subprocess.check_call(
         [sys.executable, "-m", "PyInstaller", str(spec), "-y"],
@@ -38,7 +45,7 @@ def main() -> int:
     if not cfg.is_file():
         print(f"нет {cfg}", file=sys.stderr)
         return 1
-    # Живой config.json содержит личные vless/IP сборщика — в установщик уходит чистый.
+    # Живой config.json содержит личные серверы/IP сборщика — в установщик уходит чистый.
     from app.stack import nodes
 
     shipped = nodes.sanitize_for_ship(json.loads(cfg.read_text(encoding="utf-8")))
@@ -47,16 +54,12 @@ def main() -> int:
     for pattern in ("eblit-*.json", "lagom-*.json", "_probe*.json", "*.log", "*.tmp", "*.lock", ".data-root-v1", ".legacy-names-v2"):
         for stray in dist.glob(pattern):
             stray.unlink()
-    shipped_vless = [o for o in shipped.get("outbounds", []) if o.get("type") == "vless"]
-    print(f"payload config: {len(shipped_vless)} vless")
-    if shipped_vless:
-        print("sanitize оставил vless — установщик не собираю", file=sys.stderr)
+    shipped_servers = [o for o in shipped.get("outbounds", []) if nodes.is_server(o)]
+    print(f"payload config: {len(shipped_servers)} серверов")
+    if shipped_servers:
+        print("sanitize оставил серверы — установщик не собираю", file=sys.stderr)
         return 1
-    sb = _singbox()
-    if sb is None:
-        print("нет sing-box.exe — положи его рядом с Eblit.exe", file=sys.stderr)
-    else:
-        shutil.copy2(sb, dist / "sing-box.exe")
+    shutil.copy2(sb, dist / "sing-box.exe")
     setup_spec = ROOT / "setup.spec"
     subprocess.check_call(
         [sys.executable, "-m", "PyInstaller", str(setup_spec), "-y"],

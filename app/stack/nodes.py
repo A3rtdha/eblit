@@ -1,4 +1,4 @@
-"""VLESS nodes and routing lists in config.json."""
+"""Proxy servers and routing lists in config.json."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ SELECTOR = configuration.SELECTOR
 HOSTS_FILE = "eblit-nodes.json"
 FAV_FILE = "eblit-favorite.json"
 PICK_FILE = "eblit-pick.json"
+SERVER_TYPES = frozenset({"vless", "hysteria2"})
 
 # Теги, которые 1.0.0 по ошибке увёз как «встроенные». Не хосты и не ключи —
 # только чтобы установщик затёр ту утечку, а не принял её за ноды пользователя.
@@ -131,10 +132,10 @@ def _sni(ob: dict) -> str:
 
 
 def _seed_hosts_from_config(cfg: dict) -> dict[str, str]:
-    """tag → hostname только из тех vless, что уже есть в config. Без стокового списка."""
+    """tag → hostname серверов из config. Без стокового списка."""
     out: dict[str, str] = {}
     for ob in cfg.get("outbounds", []):
-        if not isinstance(ob, dict) or ob.get("type") != "vless":
+        if not is_server(ob):
             continue
         tag = ob.get("tag")
         if not isinstance(tag, str) or not tag:
@@ -176,6 +177,24 @@ def vless_tags(cfg: dict | None = None) -> list[str]:
     tags: list[str] = []
     for ob in data.get("outbounds", []):
         if isinstance(ob, dict) and ob.get("type") == "vless":
+            tag = ob.get("tag")
+            if isinstance(tag, str) and tag:
+                tags.append(tag)
+    return tags
+
+
+def is_server(outbound: object) -> bool:
+    if not isinstance(outbound, dict):
+        return False
+    kind = outbound.get("type")
+    return isinstance(kind, str) and kind in SERVER_TYPES
+
+
+def server_tags(cfg: dict | None = None) -> list[str]:
+    data = cfg if cfg is not None else read_config()
+    tags: list[str] = []
+    for ob in data.get("outbounds", []):
+        if is_server(ob):
             tag = ob.get("tag")
             if isinstance(tag, str) and tag:
                 tags.append(tag)
@@ -369,14 +388,14 @@ def _strip_builder_routes(cfg: dict) -> None:
 
 
 def sanitize_for_ship(cfg: dict) -> dict:
-    """Конфиг для установщика: без vless и без обходов под ноды сборщика.
+    """Конфиг для установщика: без серверов и обходов под ноды сборщика.
 
     Селектор → `direct`: пустой selector sing-box не примет. Копия: живой файл не трогаем.
     """
     cfg = copy.deepcopy(cfg)
     outbounds = []
     for ob in cfg.get("outbounds", []):
-        if isinstance(ob, dict) and ob.get("type") == "vless":
+        if is_server(ob):
             continue
         outbounds.append(ob)
     if not any(isinstance(o, dict) and o.get("tag") == "direct" for o in outbounds):
@@ -557,6 +576,11 @@ def set_links(suffixes: list[str]) -> None:
 
 
 def parsed_to_outbound(parsed: dict) -> dict:
+    if parsed.get("type") == "hysteria2":
+        from app.stack import hysteria2
+
+        return hysteria2.to_outbound(parsed)
+
     tag = str(parsed.get("tag") or parsed.get("name") or parsed.get("host") or "Custom").strip()
     host = str(parsed.get("host") or "").strip()
     port = int(parsed.get("port") or 443)
@@ -663,7 +687,7 @@ def _set_selector(cfg: dict, tags: list[str]) -> None:
 
 
 def ensure_selector(cfg: dict) -> bool:
-    """Пустой или мёртвый proxy-select → первый vless или direct. True если писал.
+    """Пустой или мёртвый proxy-select → первый сервер или direct. True если писал.
 
     Не создаёт селектор, если его нет: установщик чинит только уже лежащий файл.
     """
@@ -673,7 +697,7 @@ def ensure_selector(cfg: dict) -> bool:
     )
     if not has_sel:
         return False
-    tags = vless_tags(cfg)
+    tags = server_tags(cfg)
     selected = _selector_outbounds(cfg)
     alive = set(tags)
     if selected and all(t in alive or t == "direct" for t in selected):
@@ -712,11 +736,11 @@ def remove(tag: str) -> dict:
     cfg["outbounds"] = [
         ob
         for ob in cfg.get("outbounds", [])
-        if not (isinstance(ob, dict) and ob.get("tag") == tag and ob.get("type") == "vless")
+        if not (is_server(ob) and ob.get("tag") == tag)
     ]
     if tag in _selector_outbounds(cfg):
         # Пустой селектор sing-box не принимает («missing tags») — переводим на любой живой тег.
-        rest = vless_tags(cfg)
+        rest = server_tags(cfg)
         _set_selector(cfg, rest[:1] or ["direct"])
     mapping = hosts()
     mapping.pop(tag, None)
@@ -759,7 +783,7 @@ def select(tag: str | None) -> None:
         return
 
     cfg = read_config()
-    if tag not in vless_tags(cfg):
+    if tag not in server_tags(cfg):
         raise ValueError(f"нет сервера {tag}")
     ip = ""
     for ob in cfg.get("outbounds", []):
@@ -779,7 +803,7 @@ def set_favorite(tag: str | None) -> None:
         path.unlink(missing_ok=True)
         return
     cfg = read_config()
-    if tag not in vless_tags(cfg):
+    if tag not in server_tags(cfg):
         raise ValueError(f"нет сервера {tag}")
     host = hosts().get(tag, "")
     payload = {"tag": tag}

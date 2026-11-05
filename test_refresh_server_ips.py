@@ -15,7 +15,7 @@ class FavoriteByHost(unittest.TestCase):
         try:
             with (
                 patch.object(m, "_fav", return_value=path),
-                patch("app.stack.nodes.vless_tags", return_value=["Alpha", "Beta"]),
+                patch("app.stack.nodes.server_tags", return_value=["Alpha", "Beta"]),
                 patch(
                     "app.stack.nodes.hosts",
                     return_value={"Alpha": "other.example", "Beta": "node.example"},

@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
+import platform
 import re
+import sys
 import threading
 import urllib.error
 import urllib.request
 from urllib.parse import parse_qs, unquote, urlparse
 
 import app.paths as paths
-from app.stack import nodes
+from app.stack import hysteria2, nodes
 
 SUB_FILE = "eblit-sub.json"
 UA_HAPP = "Happ/1.0"
@@ -37,7 +40,9 @@ UUID_RE = re.compile(
     re.I,
 )
 VLESS_RE = re.compile(r"vless://[^\s<>\"']+", re.I)
-OTHER_RE = re.compile(r"(?:vmess|trojan|ss|hy2|hysteria2)://", re.I)
+NODE_URI_RE = re.compile(r"(?:vless|hy2|hysteria2)://[^\s<>\"']+", re.I)
+OTHER_RE = re.compile(r"(?:vmess|trojan|ss)://", re.I)
+_SUB_PROTOCOLS = frozenset({"vless", "hysteria", "hysteria2"})
 _IP_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 
 
@@ -354,7 +359,7 @@ def _is_xray_profile(obj) -> bool:
 
 
 def _from_xray_profile(profile: dict) -> tuple[dict | None, int]:
-    """Один пригодный vless на профиль. Имя — remarks/ps/name/meta, не outbound.tag."""
+    """Один пригодный сервер на профиль. Имя — remarks/ps/name/meta, не outbound.tag."""
     skipped = 0
     obs = profile.get("outbounds")
     if not isinstance(obs, list):
@@ -365,15 +370,15 @@ def _from_xray_profile(profile: dict) -> tuple[dict | None, int]:
         if not isinstance(ob, dict):
             continue
         kind = str(ob.get("type") or ob.get("protocol") or "").lower()
-        if kind and kind != "vless":
+        if kind and kind not in _SUB_PROTOCOLS:
             skipped += 1
             continue
-        node = _from_xray(ob)
+        node = _from_xray(ob) or hysteria2.from_xray(ob)
         if node:
             if title:
                 node = {**node, "tag": title, "name": title}
             suitable.append((str(ob.get("tag") or ""), node))
-        elif kind == "vless":
+        elif kind in _SUB_PROTOCOLS:
             skipped += 1
     if not suitable:
         return None, skipped
@@ -461,13 +466,16 @@ def _collect_json(data, skipped: int) -> tuple[list[dict], int]:
         if not isinstance(obj, dict):
             return
         kind = str(obj.get("type") or obj.get("protocol") or "").lower()
-        if kind and kind != "vless":
+        if kind and kind not in _SUB_PROTOCOLS:
             skipped += 1
             return
-        node = _from_singbox(obj) or _from_clash(obj) or _from_xray(obj)
+        node = (
+            _from_singbox(obj) or _from_clash(obj) or _from_xray(obj)
+            or hysteria2.from_xray(obj) or hysteria2.from_singbox(obj)
+        )
         if node:
             found.append(node)
-        elif kind == "vless":
+        elif kind in _SUB_PROTOCOLS:
             skipped += 1
 
     def take_profile(profile: dict) -> None:
@@ -516,7 +524,7 @@ def _try_base64(text: str) -> str:
         return ""
     if not re.fullmatch(r"[A-Za-z0-9+/]+=*", compact):
         return ""
-    if "{" in compact or "vless://" in compact.lower():
+    if "{" in compact or NODE_URI_RE.search(compact):
         return ""
     pad = (-len(compact)) % 4
     try:
@@ -527,7 +535,7 @@ def _try_base64(text: str) -> str:
         out = decoded.decode("utf-8")
     except UnicodeDecodeError:
         out = decoded.decode("latin-1")
-    if re.search(r"vless://", out, re.I):
+    if NODE_URI_RE.search(out):
         return out
     return ""
 
@@ -538,18 +546,18 @@ def parse_body(raw) -> dict:
         return {"ok": False, "nodes": [], "skipped": 0, "why": "пусто"}
 
     skipped = len(OTHER_RE.findall(text))
-    uris = [m.group(0).rstrip("),.;") for m in VLESS_RE.finditer(text)]
+    uris = [m.group(0).rstrip("),.;") for m in NODE_URI_RE.finditer(text)]
     if uris:
         nodes_out: list[dict] = []
         for uri in uris:
-            node = _parse_vless_uri(uri)
+            node = _parse_vless_uri(uri) or hysteria2.parse_uri(uri)
             if node:
                 nodes_out.append(node)
             else:
                 skipped += 1
         if nodes_out:
             return {"ok": True, "nodes": nodes_out, "skipped": skipped}
-        return {"ok": False, "nodes": [], "skipped": skipped, "why": "в подписке нет пригодного vless"}
+        return {"ok": False, "nodes": [], "skipped": skipped, "why": "в подписке нет пригодных серверов"}
 
     decoded = _try_base64(text)
     if decoded:
@@ -563,9 +571,9 @@ def parse_body(raw) -> dict:
         found, skipped = _collect_json(data, skipped)
         if found:
             return {"ok": True, "nodes": found, "skipped": skipped}
-        return {"ok": False, "nodes": [], "skipped": skipped, "why": "в подписке нет пригодного vless"}
+        return {"ok": False, "nodes": [], "skipped": skipped, "why": "в подписке нет пригодных серверов"}
 
-    return {"ok": False, "nodes": [], "skipped": skipped, "why": "в подписке нет пригодного vless"}
+    return {"ok": False, "nodes": [], "skipped": skipped, "why": "в подписке нет пригодных серверов"}
 
 
 def fetch_error(exc: BaseException) -> str:
@@ -592,18 +600,50 @@ def fetch_error(exc: BaseException) -> str:
     return raw or "нет сети"
 
 
+def _device_headers() -> dict[str, str]:
+    if sys.platform != "win32":
+        return {}
+
+    import winreg
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Cryptography",
+            0,
+            winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+        ) as key:
+            machine_guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+    except OSError:
+        return {}
+    if not isinstance(machine_guid, str) or not machine_guid.strip():
+        return {}
+
+    identity = "eblit:" + machine_guid.strip().lower()
+    return {
+        "X-Hwid": hashlib.sha256(identity.encode("utf-8")).hexdigest(),
+        "X-Device-Os": "Windows",
+        "X-Ver-Os": platform.version(),
+        "X-Device-Model": "PC",
+    }
+
+
 def _download(url: str, ua: str) -> tuple[str | None, str]:
     if not str(url).lower().startswith("https://"):
         return None, "нужен https://"
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": ua, "Accept": "*/*"},
+        headers={"User-Agent": ua, "Accept": "*/*", **_device_headers()},
     )
     try:
         with _OPENER.open(req, timeout=15) as resp:
             final = resp.geturl()
             if not str(final).lower().startswith("https://"):
                 return None, "редирект не на https"
+            if str(resp.headers.get("x-hwid-max-devices-reached", "")).lower() in {"true", "1"}:
+                return None, "достигнут лимит устройств подписки — освободите место в кабинете провайдера"
+            if str(resp.headers.get("x-hwid-not-supported", "")).lower() in {"true", "1"}:
+                return None, "сервер подписки не принял идентификатор устройства"
             data = resp.read(MAX_BODY + 1)
     except urllib.error.HTTPError as exc:
         return None, f"подписка {exc.code}"
@@ -624,20 +664,28 @@ def _unique_tag(want: str, taken: set[str]) -> str:
     return f"{base}-{i}"
 
 
-def _identity_parsed(node: dict) -> tuple[str, str, int]:
+def _identity_parsed(node: dict) -> tuple[str, str, str, int]:
     try:
         port = int(node.get("port") or 443)
     except (TypeError, ValueError):
         port = 443
+    protocol = str(node.get("type") or "vless").lower()
+    credential = str(node.get("uuid") or "").strip().lower()
+    if protocol == "hysteria2":
+        credential = str(node.get("password") or "")
     return (
-        str(node.get("uuid") or "").strip().lower(),
+        protocol,
+        credential,
         str(node.get("host") or "").strip().lower(),
         port,
     )
 
 
-def _identity_ob(ob: dict, hosts_map: dict[str, str]) -> tuple[str, str, int]:
-    uuid = str(ob.get("uuid") or "").strip().lower()
+def _identity_ob(ob: dict, hosts_map: dict[str, str]) -> tuple[str, str, str, int]:
+    protocol = str(ob.get("type") or "vless").lower()
+    credential = str(ob.get("uuid") or "").strip().lower()
+    if protocol == "hysteria2":
+        credential = str(ob.get("password") or "")
     port = ob.get("server_port")
     port = port if isinstance(port, int) else 443
     tag = ob.get("tag")
@@ -650,7 +698,7 @@ def _identity_ob(ob: dict, hosts_map: dict[str, str]) -> tuple[str, str, int]:
             host = server
         elif not host:
             host = server if isinstance(server, str) else ""
-    return (uuid, str(host).strip().lower(), port)
+    return (protocol, credential, str(host).strip().lower(), port)
 
 
 def _drop_sidecar_if_gone(filename: str, alive: set[str]) -> None:
@@ -696,7 +744,7 @@ def sync(parsed_nodes: list[dict]) -> dict:
     from app.stack import roster
 
     if not parsed_nodes:
-        return _roster_fail("в подписке нет пригодного vless")
+        return _roster_fail("в подписке нет пригодных серверов")
 
     pref = get()
     owned = [t for t in (pref.get("tags") or []) if isinstance(t, str) and t]
@@ -704,25 +752,25 @@ def sync(parsed_nodes: list[dict]) -> dict:
     cfg = nodes.read_config()
     hosts_map = nodes.hosts()
 
-    existing_vless: list[dict] = []
+    existing_servers: list[dict] = []
     others: list = []
     for ob in cfg.get("outbounds", []):
-        if isinstance(ob, dict) and ob.get("type") == "vless" and isinstance(ob.get("tag"), str) and ob["tag"]:
-            existing_vless.append(ob)
+        if nodes.is_server(ob) and isinstance(ob.get("tag"), str) and ob["tag"]:
+            existing_servers.append(ob)
         else:
             others.append(ob)
 
-    by_id: dict[tuple[str, str, int], dict] = {}
-    for ob in existing_vless:
+    by_id: dict[tuple[str, str, str, int], dict] = {}
+    for ob in existing_servers:
         by_id.setdefault(_identity_ob(ob, hosts_map), ob)
 
-    manuals = [ob for ob in existing_vless if ob["tag"] not in owned_set]
+    manuals = [ob for ob in existing_servers if ob["tag"] not in owned_set]
     manual_ids = {_identity_ob(ob, hosts_map) for ob in manuals}
     taken = {ob["tag"] for ob in manuals}
     taken.update(ob["tag"] for ob in others if isinstance(ob, dict) and isinstance(ob.get("tag"), str))
     new_owned: list[dict] = []
     new_owned_tags: list[str] = []
-    seen_ids: set[tuple[str, str, int]] = set()
+    seen_ids: set[tuple[str, str, str, int]] = set()
     renames: dict[str, str] = {}
 
     for node in parsed_nodes:
@@ -743,14 +791,14 @@ def sync(parsed_nodes: list[dict]) -> dict:
         new_owned_tags.append(tag)
         hosts_map[tag] = nodes._host_for({**node, "tag": tag}, outbound)
 
-    vless_new = new_owned + manuals
-    alive = {ob["tag"] for ob in vless_new}
+    servers_new = new_owned + manuals
+    alive = {ob["tag"] for ob in servers_new}
     insert_at = len(others)
     for i, ob in enumerate(others):
         if isinstance(ob, dict) and ob.get("tag") in ("warp", "direct"):
             insert_at = i
             break
-    cfg["outbounds"] = others[:insert_at] + vless_new + others[insert_at:]
+    cfg["outbounds"] = others[:insert_at] + servers_new + others[insert_at:]
 
     if renames:
         selected = nodes._selector_outbounds(cfg)
@@ -790,7 +838,7 @@ def refresh() -> dict:
                 if again.get("nodes"):
                     parsed = again
         if not parsed.get("nodes"):
-            return _roster_fail(parsed.get("why") or "в подписке нет пригодного vless")
+            return _roster_fail(parsed.get("why") or "в подписке нет пригодных серверов")
         with nodes.configuration.locked():
             if get().get("url") != url:
                 return _roster_fail("ссылка подписки изменилась — обновите список ещё раз")

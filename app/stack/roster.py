@@ -1,4 +1,4 @@
-"""Vless nodes from config.json: hostnames, live IPs, selector pick. Read-only."""
+"""Proxy servers from config.json: hostnames, live IPs, selector pick. Read-only."""
 
 from __future__ import annotations
 
@@ -99,7 +99,7 @@ def stack_nodes() -> dict:
     manual = bool(pick and pick.get("manual"))
     node_rows = []
     for ob in outbounds:
-        if not isinstance(ob, dict) or ob.get("type") != "vless":
+        if not nodes.is_server(ob):
             continue
         tag = ob.get("tag")
         if not isinstance(tag, str) or not tag:

@@ -17,6 +17,7 @@ from app.stack import autostart, nodes, routing_safety, singbox, teredo, warp
 from app.stack.run import hidden, image_running, kill_image
 
 DEST = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Eblit"
+_SETUP_EXE = "EblitSetup.exe"
 
 # Sidecar'ы сборщика и его runtime-снимки. Даже если pack забыл вычистить dist —
 # в Program Files они не должны оказаться.
@@ -295,7 +296,7 @@ def _configure_warp() -> None:
 
 
 def _register_uninstall() -> None:
-    setup = DEST / "EblitSetup.exe"
+    setup = DEST / _SETUP_EXE
     key = winreg.CreateKey(
         winreg.HKEY_LOCAL_MACHINE,
         r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Eblit",
@@ -314,7 +315,7 @@ def _unregister() -> None:
             winreg.HKEY_LOCAL_MACHINE,
             r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Eblit",
         )
-    except OSError:
+    except FileNotFoundError:
         pass
 
 
@@ -369,7 +370,7 @@ def run() -> int:
         _ensure_config_accepted(downloaded=downloaded)
         # Ключ снятия — до тяжёлых шагов: упавшая установка должна сниматься штатно.
         if getattr(sys, "frozen", False):
-            shutil.copy2(sys.executable, DEST / "EblitSetup.exe")
+            shutil.copy2(sys.executable, DEST / _SETUP_EXE)
         _register_uninstall()
         _begin("warpcfg")
         _configure_warp()
@@ -387,16 +388,23 @@ def run() -> int:
 def uninstall() -> int:
     if not _stop_running():
         _log("Eblit или sing-box ещё живы — часть файлов может остаться")
-    _unregister()
     autostart.remove()
     warp.disconnect()
     warp.reset_mode()
     _drop_shortcuts()
     if DEST.exists():
+        setup = DEST / _SETUP_EXE
+        can_restore_setup = getattr(sys, "frozen", False) and setup.is_file()
         try:
             shutil.rmtree(DEST)
         except OSError as exc:
             _log(f"остались файлы в {DEST}: {exc}")
+            if can_restore_setup and DEST.is_dir() and not setup.exists():
+                try:
+                    shutil.copy2(sys.executable, setup)
+                except OSError as restore_error:
+                    _log(f"не удалось восстановить деинсталлятор: {restore_error}")
             return 1
+    _unregister()
     _log("снято")
     return 0

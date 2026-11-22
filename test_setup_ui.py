@@ -146,6 +146,34 @@ class Routes(unittest.TestCase):
         calls["windowed"].assert_not_called()
 
 
+class UninstallEntry(unittest.TestCase):
+    def test_installed_setup_defers_removal_to_copy(self):
+        from app.setup import __main__ as entry
+
+        with (
+            patch.object(entry, "frozen", return_value=True),
+            patch.object(entry, "relaunch_from_copy", return_value=True),
+            patch.object(entry, "uninstall") as uninstall,
+            patch.object(entry, "_box") as box,
+        ):
+            self.assertEqual(entry._uninstall(), 0)
+        uninstall.assert_not_called()
+        box.assert_not_called()
+
+    def test_copy_reports_result_after_removal(self):
+        from app.setup import __main__ as entry
+
+        with (
+            patch.object(entry, "frozen", return_value=True),
+            patch.object(entry, "relaunch_from_copy", return_value=False),
+            patch.object(entry, "uninstall", return_value=0) as uninstall,
+            patch.object(entry, "_box") as box,
+        ):
+            self.assertEqual(entry._uninstall(), 0)
+        uninstall.assert_called_once()
+        box.assert_called_once_with("Eblit снят.")
+
+
 class Headless(unittest.TestCase):
     def test_launches_app_after_success(self):
         from app.setup import __main__ as entry

@@ -385,15 +385,19 @@ class Uninstall(Base):
         super().setUp()
         self.dest.mkdir(parents=True)
         (self.dest / "Eblit.exe").write_bytes(b"exe")
-        self.enter(patch.object(install, "_unregister"))
+        self.unregister = self.enter(patch.object(install, "_unregister"))
         self.enter(patch.object(install, "_drop_shortcuts"))
         self.enter(patch.object(install, "_stop_running", return_value=True))
         self.warp = self.enter(patch.object(install, "warp"))
         self.auto = self.enter(patch.object(install, "autostart"))
 
-    def test_removes_dest_and_returns_zero(self):
+    def test_removes_dest_before_unregistering(self):
+        def check_dest_removed():
+            self.assertFalse(self.dest.exists())
+
+        self.unregister.side_effect = check_dest_removed
         self.assertEqual(install.uninstall(), 0)
-        self.assertFalse(self.dest.exists())
+        self.unregister.assert_called_once()
 
     def test_resets_warp_and_autostart(self):
         install.uninstall()
@@ -411,7 +415,28 @@ class Uninstall(Base):
         with patch.object(install.shutil, "rmtree", side_effect=OSError("занято")):
             code = install.uninstall()
         self.assertEqual(code, 1)
+        self.unregister.assert_not_called()
         self.assertTrue(any("остал" in line.lower() or "занято" in line for line in self.logs))
+
+
+    def test_partial_removal_preserves_uninstall_command_for_retry(self):
+        setup = self.dest / "EblitSetup.exe"
+        setup.write_bytes(b"installed copy")
+        worker = self.root / "EblitSetup.exe"
+        worker.write_bytes(b"running copy")
+
+        def fail_after_removing_setup(_path):
+            setup.unlink()
+            raise PermissionError("занято")
+
+        with (
+            patch.object(install.sys, "frozen", True, create=True),
+            patch.object(install.sys, "executable", str(worker)),
+            patch.object(install.shutil, "rmtree", side_effect=fail_after_removing_setup),
+        ):
+            self.assertEqual(install.uninstall(), 1)
+        self.assertEqual(setup.read_bytes(), worker.read_bytes())
+        self.unregister.assert_not_called()
 
 
 class WarpCfg(unittest.TestCase):

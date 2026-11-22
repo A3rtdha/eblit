@@ -3,10 +3,12 @@ from __future__ import annotations
 import ctypes
 import subprocess
 import sys
+from pathlib import Path
 
 from app.paths import frozen
 from app.setup import install, ui
 from app.setup.install import DEST, run, uninstall
+from app.setup.uninstall_copy import relaunch_from_copy
 from app.stack import admin
 
 MB_INFO = 0x40
@@ -64,8 +66,15 @@ def _windowed(args: list[str]) -> int:
 
 
 def _uninstall() -> int:
-    code = uninstall()
-    if frozen():
+    packaged = frozen()
+    try:
+        if packaged and relaunch_from_copy(Path(sys.executable), DEST, install.log_path()):
+            return 0
+        code = uninstall()
+    except (OSError, subprocess.SubprocessError) as exc:
+        install.log(f"ошибка удаления: {exc}")
+        code = 1
+    if packaged:
         if code == 0:
             _box("Eblit снят.")
         else:

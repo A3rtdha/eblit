@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.stack import hysteria2, nodes, subscribe
-from test_subscribe import BASE_CFG, UUID_A, happ_profile, happ_xray_outbound, vless_uri
+from tests.stack.test_subscribe import BASE_CFG, UUID_A, happ_profile, happ_xray_outbound, vless_uri
 
 
 PIN_HEX = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"

@@ -1,49 +1,66 @@
 # Eblit
 
-Windows-приложение: узкий split для Fastly/Spotify (через Cloudflare WARP) и выбранных доменов (через свой VLESS). Остальной трафик — игры, Discord, Google, Telegram — идёт мимо, как без него.
-
-## Что делает
-
-| Трафик | Куда |
-|---|---|
-| Сети Fastly (часть Spotify и другие сайты на этом CDN) | WARP SOCKS `:40000` |
-| Домены из настроек (ИИ, Meta/Quest, …) | VLESS |
-| Всё остальное | напрямую |
-
-В TUN попадает только белый список адресов. Для Riot/Valorant закреплён прямой маршрут. В списке VPN допускаются полные домены; отдельные зоны вроде `com` отклоняются.
+Приложение для раздельной маршрутизации в Windows. Сети Fastly, в том числе часть трафика Spotify, идут через Cloudflare WARP. Домены из настроек идут через выбранный сервер VLESS или Hysteria2. Остальной трафик идёт напрямую.
 
 ## Установка
 
-Скачай `EblitSetup.exe` с [релизов](https://github.com/A3rtdha/eblit/releases/latest). Установщик поставит WARP (если его нет), sing-box и саму программу в `%ProgramFiles%\Eblit`.
+Скачай `EblitSetup.exe` со страницы [релизов](https://github.com/A3rtdha/eblit/releases/latest). Установщик добавит Eblit и sing-box в `%ProgramFiles%\Eblit` и поставит Cloudflare WARP, если его ещё нет. Настройки и журналы приложения хранятся в `%LOCALAPPDATA%\Eblit`. Удалить Eblit можно через список установленных приложений Windows.
 
-Обновление из окна: цифра версии внизу по центру → если есть свежее, ещё раз нажать.
+Для обновления нажми на номер версии внизу окна. Если доступна новая версия, появится кнопка «Обновить».
 
-## Сборка из исходников
+## Где что лежит
 
-Нужны Python 3.12 и PyInstaller. Ядро собирается из закреплённой версии sing-box extended: XHTTP сохраняется, для Hysteria2 добавлена проверка отпечатка полного сертификата.
+| Путь | Содержимое |
+| --- | --- |
+| [`app/`](app/) | Точка входа, связь окна с Python, трей и хранение данных |
+| [`app/stack/`](app/stack/) | Подключение, маршруты, WARP, sing-box, серверы и подписки |
+| [`app/web/`](app/web/) и [`app/assets/`](app/assets/) | HTML, CSS, JavaScript и иконки окна |
+| [`app/setup/`](app/setup/) | Установка, обновление и удаление приложения |
+| [`tools/core/`](tools/core/) | Сборка sing-box. Версии исходников, Go, патча и проверок закреплены в [манифесте](tools/core/manifest.json) |
+| [`tools/packaging/`](tools/packaging/) | Спецификации PyInstaller для приложения и установщика |
+| [`tests/`](tests/) | Проверки окна (`desktop`, `web`), стека (`stack`), установщика (`installer`) и сборки (`distribution`) |
+| [`docs/behavior.md`](docs/behavior.md) | Как работают подключение, диагностика, настройки и обновления |
+| [`config.example.json`](config.example.json) | Стартовая конфигурация без личных серверов |
+
+## Запуск из исходников
+
+Открой PowerShell в корне клона. Нужны Windows и Python 3.12. Для подключения через WARP нужен установленный клиент Cloudflare WARP.
 
 ```powershell
-pip install -r app/requirements.txt pyinstaller
-copy config.example.json config.json
+python -m pip install -r app/requirements.txt
+if (-not (Test-Path config.json)) { Copy-Item config.example.json config.json }
 python tools/core/build.py --work-dir "$env:TEMP/eblit-core" --output sing-box.exe
+python -m app
 ```
 
-Команда для PowerShell сама скачивает закреплённый Go и исходники, проверяет их контрольные суммы и собирает `sing-box.exe` рядом с проектом. Сборщик проверяет передачу трафика через XHTTP и Hysteria2 на локальном стенде и отказ при неверном отпечатке сертификата. Установщик использует эту сборку; упаковка проверяет её SHA-256. GitHub Actions проверяет сборку по тегу; релиз и установщик публикуются через учётную запись владельца.
+Сборщик скачивает закреплённые исходники и Go, проверяет контрольные суммы и тестирует XHTTP и Hysteria2 локально. Готовый `sing-box.exe` лежит в корне клона.
 
-В `config.json` подставь свои VLESS (uuid, public_key, хост). Живой файл в git не лежит.
+Добавь сервер VLESS или URL подписки в настройках окна. При запуске из исходников `config.json` и остальные данные приложения лежат рядом с `config.example.json`. Ключи и ссылки подписок храни в локальных файлах.
 
+Стеком можно управлять из терминала через `python -m app --stack`. Основные команды — `start`, `stop`, `reload` и `test`.
+
+## Проверки
+
+Установи зависимости из `app/requirements.txt` и запусти проверки из корня клона. Для тестов JavaScript подойдёт Node.js 24.
+
+```powershell
+python -m unittest discover
+node --test "tests/web/*.test.js"
 ```
-python -m app            # окно
-python -m app.pack       # dist/Eblit/ и dist/EblitSetup.exe
+
+## Сборка установщика
+
+Подготовь `config.json` и `sing-box.exe` по шагам выше. Затем запусти из корня клона следующие команды.
+
+```powershell
+python -m pip install -r requirements-build.txt
+python -m app.pack
 ```
 
-CLI стека: `python -m app --stack start|stop|reload|test`.
+Готовое приложение появится в `dist/Eblit/`, установщик — в `dist/EblitSetup.exe`. Сборка проверяет SHA-256 ядра и кладёт в установщик очищенную копию конфигурации.
+
+Для своих релизов в форке укажи `владелец/репозиторий` в `REPO` в [`app/version.py`](app/version.py). По этому адресу приложение проверяет обновления. [Workflow выпуска](.github/workflows/release.yml) запускает сборку по тегу `vX.Y.Z`. Для публикации создай релиз с тегом, который соответствует `VERSION`, и прикрепи к нему `EblitSetup.exe`. Пример описания есть в [`.github/release-notes.md`](.github/release-notes.md).
 
 ## Лицензия
 
-Пользуйся как хочешь. Ключи чужих VPN в репозиторий не клади.
-
-
-Настройки установленной программы хранятся в `%LOCALAPPDATA%\Eblit` и одинаково доступны обычному и административному запуску. Выход из окна или трея останавливает подключение; жёлтая кнопка оставляет приложение работать в трее.
-
-Проверки: `python -m unittest discover` и `node --test app/web/node-parse.test.js app/web/power-state.test.js app/web/links.test.js`.
+Пользуйся как хочешь.

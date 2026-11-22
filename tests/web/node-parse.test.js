@@ -1,5 +1,5 @@
 const assert = require("assert");
-const { parseNodes, parseVlessUri, maskSecret, previewRows } = require("./node-parse.js");
+const { parseNodes, parseVlessUri, maskSecret, previewRows } = require("../../app/web/node-parse.js");
 
 const GOOD =
   "vless://aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee@node.example:443" +
@@ -131,7 +131,7 @@ throwsFail(
 
 
 {
-  const { displayName } = require("./node-parse.js");
+  const { displayName } = require("../../app/web/node-parse.js");
   assert.strictEqual(displayName("🇪🇪 Estonia | No ads"), "[EE] Estonia | No ads");
   assert.strictEqual(displayName("🇪🇺 ⚡ Основной Wi-Fi ⚡"), "[EU] ⚡ Основной Wi-Fi ⚡");
   assert.strictEqual(displayName("Custom"), "Custom");

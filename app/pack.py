@@ -32,7 +32,8 @@ def main() -> int:
         print("нет sing-box.exe — положи закреплённое ядро рядом с проектом", file=sys.stderr)
         return 1
     verify_singbox(sb)
-    spec = ROOT / "eblit.spec"
+    packaging = ROOT / "tools" / "packaging"
+    spec = packaging / "eblit.spec"
     subprocess.check_call(
         [sys.executable, "-m", "PyInstaller", str(spec), "-y"],
         cwd=str(ROOT),
@@ -60,7 +61,7 @@ def main() -> int:
         print("sanitize оставил серверы — установщик не собираю", file=sys.stderr)
         return 1
     shutil.copy2(sb, dist / "sing-box.exe")
-    setup_spec = ROOT / "setup.spec"
+    setup_spec = packaging / "setup.spec"
     subprocess.check_call(
         [sys.executable, "-m", "PyInstaller", str(setup_spec), "-y"],
         cwd=str(ROOT),

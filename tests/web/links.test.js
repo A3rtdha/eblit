@@ -4,7 +4,7 @@ const path = require("path");
 const vm = require("vm");
 const { test } = require("node:test");
 
-const source = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
+const source = fs.readFileSync(path.join(__dirname, "../../app/web/app.js"), "utf8");
 const links = source.slice(source.indexOf("const DEFAULT_LINKS ="), source.indexOf("const PROBE_SECONDS ="));
 
 function settings(api) {

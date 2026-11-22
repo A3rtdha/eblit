@@ -1,46 +1,42 @@
-# Live secrets — never the working config, only config.example.json
+# Local config and state
 config.json
-README.txt
+*.json.lock
 lagom-*.json
-eblit-power.json
-eblit-first.json
+eblit-*.json
 _probe*.json
+.legacy-names-v2
+.data-root-v1
 
-# Runtime
+# Runtime logs and cache
 *.log
-health.log
-sing-box.log
-split-ui.log
+*.tmp
 
-# Binaries and build output
-sing-box.exe
+# Build output and binaries
+build/
 dist/
 dist4/
-build/
 *.exe
 *.msi
 *.zip
 
-# Local junk
-.cursor/*
-!.cursor/rules/
-!.cursor/rules/**
+# Python
 .pytest_cache/
 __pycache__/
 *.pyc
 *.pyo
 .venv/
 venv/
+
+# Editor and system files
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
+.DS_Store
+Thumbs.db
+
+# Local scratch files
+README.txt
 _tkprobe.py
 _uidemo.py
 _shot*
 *.bak
-.DS_Store
-Thumbs.db
-
-eblit-*.json
-*.json.lock
-*.tmp
-
-.legacy-names-v2
-.data-root-v1

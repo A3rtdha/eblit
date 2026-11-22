@@ -1,10 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
 
-root = Path(SPECPATH)
+packaging = Path(SPECPATH).resolve()
+root = packaging.parent.parent
 
 a = Analysis(
-    [str(root / "eblit_boot.py")],
+    [str(packaging / "eblit_boot.py")],
     pathex=[str(root)],
     binaries=[],
     datas=[

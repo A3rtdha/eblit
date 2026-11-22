@@ -5,16 +5,14 @@ from __future__ import annotations
 import json
 import unittest
 from ipaddress import ip_address, ip_network
-from pathlib import Path
 
 from app.stack import nodes
-
-ROOT = Path(__file__).resolve().parent
+from tests import REPO_ROOT
 
 
 def load_cfg() -> dict:
-    live = ROOT / "config.json"
-    example = ROOT / "config.example.json"
+    live = REPO_ROOT / "config.json"
+    example = REPO_ROOT / "config.example.json"
     path = live if live.is_file() else example
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -81,7 +79,7 @@ class ConfigShape(unittest.TestCase):
 class ExampleIsSafe(unittest.TestCase):
     def test_example_has_no_vless_and_no_node_bypasses(self):
         """Пример = то, что уедет в установщик. Личных нод и их обходов быть не должно."""
-        cfg = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
+        cfg = json.loads((REPO_ROOT / "config.example.json").read_text(encoding="utf-8"))
         self.assertEqual([o for o in cfg["outbounds"] if o.get("type") == "vless"], [])
         sel = next(o for o in cfg["outbounds"] if o.get("tag") == "proxy-select")
         self.assertEqual(sel["outbounds"], ["direct"])

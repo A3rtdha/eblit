@@ -7,8 +7,7 @@ import unittest
 from pathlib import Path
 
 from app.stack import nodes, routing_safety
-
-ROOT = Path(__file__).resolve().parent
+from tests import REPO_ROOT
 
 
 def _cfg() -> dict:
@@ -147,7 +146,7 @@ class LiveShip(unittest.TestCase):
     def test_example_and_live_lose_every_vless(self):
         """Именно этот файл pack кладёт в установщик — не стендовый _cfg()."""
         for name in ("config.example.json", "config.json"):
-            path = ROOT / name
+            path = REPO_ROOT / name
             if not path.is_file():
                 continue
             out = nodes.sanitize_for_ship(json.loads(path.read_text(encoding="utf-8")))

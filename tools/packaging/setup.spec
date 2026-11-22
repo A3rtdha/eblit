@@ -6,7 +6,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(errors="replace")
     sys.stderr.reconfigure(errors="replace")
 
-root = Path(SPECPATH)
+root = Path(SPECPATH).resolve().parent.parent
 payload = root / "dist" / "Eblit"
 
 # Без этого setup собирался пустым, и юзер узнавал об этом только при запуске.

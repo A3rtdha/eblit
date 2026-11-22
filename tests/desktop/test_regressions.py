@@ -247,6 +247,7 @@ class Shutdown(unittest.TestCase):
 
     def test_unexpected_start_error_rolls_back(self):
         with (
+            patch.object(lifecycle, "_prepare_routing"),
             patch.object(lifecycle.singbox, "kill"),
             patch.object(lifecycle.singbox, "wait_gone", return_value=True),
             patch.object(lifecycle.health, "main", side_effect=RuntimeError("error")),

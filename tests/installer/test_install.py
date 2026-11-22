@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from app.setup import install
 from app.stack import nodes, routing_safety
+from tests import REPO_ROOT
 
 
 def make_payload(src: Path) -> None:
@@ -468,7 +469,7 @@ class WarpCfg(unittest.TestCase):
 
 class RoutingMigration(unittest.TestCase):
     def test_upgrade_repairs_routes_and_preserves_user_servers(self):
-        example = Path(__file__).resolve().parent / "config.example.json"
+        example = REPO_ROOT / "config.example.json"
         cfg = json.loads(example.read_text(encoding="utf-8"))
         cfg["outbounds"].append({"type": "vless", "tag": "Home", "uuid": "private"})
         for rule in cfg["route"]["rules"]:
